@@ -23,10 +23,10 @@ protocol.
 │                                           │  └───────┬────────┘ │  │
 │                                           └──────────┼──────────┘  │
 │                                                      │             │
-│  ┌──────────────────┐    chrome.tabs       ┌────────┴────────────┐ │
-│  │  content.ts      │ ◄───────────────────►│  chrome.scripting   │ │
-│  │  (activeTab)     │   sendMessage        │  (executeScript)    │ │
-│  └──────────────────┘                     └─────────────────────┘ │
+│                                           ┌────────┴────────────┐ │
+│                                           │  chrome.scripting   │ │
+│                                           │  (executeScript)    │ │
+│                                           └─────────────────────┘ │
 │                                                                    │
 └─────────────────────────────────┬──────────────────────────────────┘
                                   │ stdin/stdout (length-prefixed JSON)
@@ -48,7 +48,6 @@ extension/
 │   │   ├── App.tsx          # Wires PopupApp to mock or native backend
 │   │   └── styles.css       # Tailwind + shadcn tokens
 │   ├── background.ts        # Service worker: commands, autofill orchestration
-│   └── content.ts           # Passive content script (activeTab only)
 ├── services/
 │   ├── mock-mode.ts         # isMockMode() flag
 │   ├── native-messaging.ts  # connectNativeHost, request correlation, validation
@@ -113,8 +112,9 @@ to be reachable; the shortcut is honored in any case once the SW is up.
 | `storage`        | Persist popup settings (chrome.storage.local)    |
 | `commands`       | Register the `Ctrl+Shift+2` shortcut              |
 
-No `host_permissions`. We do NOT inject into all pages — the content
-script runs only when the user invokes the popup or presses the shortcut.
+No `host_permissions` and no static content script. The extension injects
+only the small autofill function through `chrome.scripting.executeScript`
+after the user clicks Fill or invokes the keyboard shortcut.
 
 ## Content Security Policy
 

@@ -23,6 +23,11 @@ const MOCK = process.env.KEYTAP_MOCK === "1";
 
 export default defineConfig({
   srcDir: ".",
+  manifestVersion: 3,
+  // The extension imports React APIs explicitly. Disable WXT's auto-import
+  // preset so the React module is not rewritten as a generated virtual
+  // module during config/type generation.
+  imports: false,
   modules: ["@wxt-dev/module-react"],
   manifest: {
     name: "Keytap – 2FA Autofill",
@@ -31,22 +36,9 @@ export default defineConfig({
       "Local-first 2FA/TOTP autofill. Secrets never leave the native host; " +
       "the popup only sees short-lived codes.",
     version: "0.1.0",
-    manifest_version: 3,
     action: {
       default_popup: "popup/index.html",
       default_title: "Keytap (Ctrl+Shift+2)",
-      default_icon: {
-        "16": "icon/16.png",
-        "32": "icon/32.png",
-        "48": "icon/48.png",
-        "128": "icon/128.png",
-      },
-    },
-    icons: {
-      "16": "icon/16.png",
-      "32": "icon/32.png",
-      "48": "icon/48.png",
-      "128": "icon/128.png",
     },
     permissions: [
       "activeTab",
@@ -60,16 +52,6 @@ export default defineConfig({
       service_worker: "background.js",
       type: "module",
     },
-    content_scripts: [
-      {
-        matches: ["<all_urls>"],
-        js: ["content.js"],
-        run_at: "document_idle",
-        // activeTab means this script only actually runs after the user
-        // invokes the extension. WXT still expects the manifest entry.
-        all_frames: false,
-      },
-    ],
     commands: {
       "autofill-current-tab": {
         suggested_key: {
@@ -92,12 +74,21 @@ export default defineConfig({
   // we redeclare here so builds don't break if the root tsconfig is moved.
   alias: {
     "@": new URL("../src", import.meta.url).pathname,
+    "~": new URL(".", import.meta.url).pathname,
     "@keytap/popup": new URL(
-      "../src/components/keytap/popup/index.ts",
+      "../src/components/keytap/popup/",
+      import.meta.url,
+    ).pathname,
+    "@keytap/popup/": new URL(
+      "../src/components/keytap/popup/",
       import.meta.url,
     ).pathname,
     "@keytap/lib": new URL(
-      "../src/components/keytap/lib/index.ts",
+      "../src/components/keytap/lib/",
+      import.meta.url,
+    ).pathname,
+    "@keytap/lib/": new URL(
+      "../src/components/keytap/lib/",
       import.meta.url,
     ).pathname,
     "@keytap/protocol": new URL(
@@ -107,7 +98,23 @@ export default defineConfig({
   },
   // Always define the KEYTAP_MOCK env var, even when unset, so import.meta.env
   // shape is stable across dev/prod builds.
-  define: {
-    "import.meta.env.KEYTAP_MOCK": JSON.stringify(MOCK ? "1" : "0"),
-  },
+  vite: () => ({
+    define: {
+      "import.meta.env.KEYTAP_MOCK": JSON.stringify(MOCK ? "1" : "0"),
+    },
+    resolve: {
+      alias: {
+        "@": new URL("../src", import.meta.url).pathname,
+        "~": new URL(".", import.meta.url).pathname,
+        "@keytap/popup/": new URL("../src/components/keytap/popup/", import.meta.url).pathname,
+        "@keytap/lib/": new URL("../src/components/keytap/lib/", import.meta.url).pathname,
+      },
+    },
+    ssr: {
+      // Shared popup components live above the extension root. Bundle their
+      // React dependencies instead of asking ViteNode to resolve them from
+      // the shared source file's parent directory.
+      noExternal: true,
+    },
+  }),
 });

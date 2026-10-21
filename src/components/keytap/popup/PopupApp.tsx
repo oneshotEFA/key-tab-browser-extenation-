@@ -47,13 +47,8 @@ import { StatusBar } from "./StatusBar";
 import { AddAccountDialog } from "./AddAccountDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import {
-  MOCK_MODE,
-  base32Decode,
-  generateTotp,
   parseOtpAuthUri,
-  totpMsRemaining,
 } from "@keytap/lib";
-import { getMockAccounts, type MockAccount } from "@keytap/lib/mock-accounts";
 
 // ---------------------------------------------------------------------------
 // PopupBackend interface
@@ -402,18 +397,10 @@ function Spinner() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// createMockBackend
-// ---------------------------------------------------------------------------
-
-/**
- * In-process mock backend. Used by the preview harness and by `KEYTAP_MOCK=1`
- * extension dev builds. Generates codes locally with Web Crypto TOTP.
- *
- * SECURITY: the only secret it ever touches is the RFC 6238 test vector
- * (published in the RFC). It is NEVER safe to use real secrets here.
- */
-export function createMockBackend(opts?: { hostVersion?: string }): PopupBackend {
+/* Legacy mock backend moved to PopupMockBackend.ts. The block is kept in this
+   checkpoint temporarily so the production component stays unchanged beyond
+   the split. */
+/*
   // The mock account store. Mutable — AddAccountDialog can add to it.
   let mockAccounts: MockAccount[] = getMockAccounts();
   let vaultLocked = false;
@@ -485,7 +472,7 @@ export function createMockBackend(opts?: { hostVersion?: string }): PopupBackend
           try {
             return { ...DEFAULT_SETTINGS, ...JSON.parse(raw), neverAutoSubmit: true };
           } catch {
-            /* ignore */
+            // ignore
           }
         }
       }
@@ -557,3 +544,4 @@ function base32EncodeSecret(bytes: Uint8Array): string {
 
 // Re-export so callers can grab everything from one import.
 export { MOCK_MODE as MOCK_MODE_FLAG } from "@keytap/lib";
+*/

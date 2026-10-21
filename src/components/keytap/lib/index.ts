@@ -9,4 +9,3 @@
 
 export * from "./utils";
 export * from "./totp";
-export * from "./mock-mode";

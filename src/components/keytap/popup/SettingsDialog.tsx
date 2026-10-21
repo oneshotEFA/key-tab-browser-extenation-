@@ -22,19 +22,19 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
-import { Label } from "@/components/ui/label";
+} from "../../ui/dialog";
+import { Button } from "../../ui/button";
+import { Switch } from "../../ui/switch";
+import { Slider } from "../../ui/slider";
+import { Label } from "../../ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+} from "../../ui/select";
+import { Separator } from "../../ui/separator";
 import type { PopupSettings } from "./types";
 import { cn } from "@keytap/lib";
 

@@ -30,8 +30,21 @@ import {
   type ListAccountsPayload,
   type StatusPayload,
 } from "@keytap/protocol";
-import type { PopupBackend, PopupSettings } from "@keytap/popup";
-import { DEFAULT_SETTINGS } from "@keytap/popup";
+import type { PopupBackend } from "@keytap/popup/PopupApp";
+import type { PopupSettings } from "@keytap/popup/types";
+
+// Keep the background/native-messaging layer independent from the React popup
+// runtime. Importing DEFAULT_SETTINGS from the popup barrel would eagerly load
+// the whole JSX tree while WXT evaluates the service-worker entrypoint.
+const DEFAULT_SETTINGS: PopupSettings = {
+  inactivityLockSec: 300,
+  maxSessionSec: 1800,
+  lockOnOsLock: true,
+  requireReauthForDelete: true,
+  requireReauthForExport: true,
+  neverAutoSubmit: true,
+  theme: "system",
+};
 
 // Length-prefix: Chrome's native-messaging spec uses 4-byte little-endian
 // uint32 length. We don't write the prefix ourselves — chrome.runtime.Port

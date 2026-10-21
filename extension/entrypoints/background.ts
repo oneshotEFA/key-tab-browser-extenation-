@@ -18,10 +18,11 @@
  *     (see native-messaging.ts validateResponse).
  */
 
-import { isMockMode } from "@/services/mock-mode";
-import { connectNativeHost, requestGetCode, requestListAccounts } from "@/services/native-messaging";
-import { authorizeAutofill } from "@/services/origin-validator";
-import { executeFill, isCodeSafeToFill } from "@/services/autofill";
+import { isMockMode } from "~/services/mock-mode";
+import { connectNativeHost, requestGetCode, requestListAccounts } from "~/services/native-messaging";
+import { authorizeAutofill } from "~/services/origin-validator";
+import { executeFill, isCodeSafeToFill } from "~/services/autofill";
+import { defineBackground } from "wxt/utils/define-background";
 
 console.info("[keytap:bg] service worker starting (mock=%s)", isMockMode());
 
@@ -44,24 +45,22 @@ function ensurePort(): chrome.runtime.Port | null {
   return port;
 }
 
-chrome.runtime.onConnectNative.addListener((p) => {
-  // For long-lived ports — we don't use these for request/response today,
-  // but WXT/Chrome will fire this for completeness.
-  p.onMessage.addListener(() => {
-    /* no-op */
+// Keyboard shortcut: Ctrl+Shift+2 (Cmd+Shift+2 on macOS). WXT evaluates
+// entrypoints with a partial fake browser during build; that fake intentionally
+// does not implement commands.onCommand, while Chrome does.
+try {
+  chrome.commands?.onCommand.addListener(async (command) => {
+    if (command !== "autofill-current-tab") return;
+    console.info("[keytap:bg] command: %s", command);
+    try {
+      await autofillActiveTab();
+    } catch (e) {
+      console.error("[keytap:bg] autofill failed", e);
+    }
   });
-});
-
-// Keyboard shortcut: Ctrl+Shift+2 (Cmd+Shift+2 on macOS)
-chrome.commands?.onCommand.addListener(async (command) => {
-  if (command !== "autofill-current-tab") return;
-  console.info("[keytap:bg] command: %s", command);
-  try {
-    await autofillActiveTab();
-  } catch (e) {
-    console.error("[keytap:bg] autofill failed", e);
-  }
-});
+} catch {
+  // Build-time fake browser only; the real listener is registered in Chrome.
+}
 
 // Message from the popup (for "Fill" button clicks that need the SW).
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -160,3 +159,8 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
   return false;
 });
+
+// WXT requires background entrypoints to expose the standard definition.
+// The implementation above intentionally registers listeners at module load,
+// matching Chrome MV3 service-worker semantics.
+export default defineBackground(() => {});

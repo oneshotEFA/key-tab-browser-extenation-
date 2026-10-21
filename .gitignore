@@ -19,6 +19,9 @@ node_modules
 
 # production
 /build
+/target/
+/extension/.output/
+/extension/.wxt/
 
 # misc
 .DS_Store

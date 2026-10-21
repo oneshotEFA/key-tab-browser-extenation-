@@ -6,7 +6,8 @@
  * backend and mock-accounts module).
  */
 
-export { PopupApp, createMockBackend } from "./PopupApp";
+export { PopupApp } from "./PopupApp";
+export { createMockBackend } from "./PopupMockBackend";
 export type { PopupBackend } from "./PopupApp";
 export * from "./types";
 export { TopBar } from "./TopBar";

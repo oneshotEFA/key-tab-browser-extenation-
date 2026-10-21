@@ -13,11 +13,15 @@
  */
 
 import { useEffect, useState } from "react";
-import type { PopupBackend } from "@keytap/popup";
-import { PopupApp } from "@keytap/popup";
-import { isMockMode } from "@/services/mock-mode";
-import { createNativeBackend } from "@/services/native-messaging";
-import { listenForFillEvents } from "@/services/autofill";
+import type { PopupBackend } from "@keytap/popup/PopupApp";
+import { PopupApp } from "@keytap/popup/PopupApp";
+import { createNativeBackend } from "~/services/native-messaging";
+import { listenForFillEvents } from "~/services/autofill";
+
+// This compile-time constant lets production Rollup builds remove the entire
+// mock backend chunk, including its published RFC test vector.
+const IS_MOCK_BUILD =
+  (import.meta as { env?: Record<string, string | undefined> }).env?.KEYTAP_MOCK === "1";
 
 export function App() {
   const [backend, setBackend] = useState<PopupBackend | null>(null);
@@ -27,9 +31,9 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (isMockMode()) {
+      if (IS_MOCK_BUILD) {
         // Dynamic import so production builds can drop the mock chunk.
-        const mod = await import("@keytap/popup");
+        const mod = await import("@keytap/popup/PopupMockBackend");
         if (cancelled) return;
         setBackend(mod.createMockBackend({ hostVersion: "0.1.0-mock" }));
         setHostVersionLabel("0.1.0-mock");
@@ -80,14 +84,14 @@ export function App() {
   // Wire up the "keytap:fill" event from PopupApp to the autofill service.
   useEffect(() => {
     const off = listenForFillEvents(async (detail) => {
-      // Delegate the actual fill to the autofill service, which talks to
-      // the content script via chrome.tabs.sendMessage.
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id ?? 0 },
-          func: fillInPage,
-          args: [detail.code],
+        const response = await chrome.runtime.sendMessage({
+          type: "keytap:fill-from-popup",
+          accountId: detail.accountId,
         });
+        if (!response?.ok) {
+          throw new Error(response?.error ?? "autofill failed");
+        }
       } catch (e) {
         console.error("keytap:fill failed", e);
       }
@@ -110,28 +114,4 @@ export function App() {
       hostVersionLabel={hostVersionLabel}
     />
   );
-}
-
-/**
- * Injected into the page by chrome.scripting.executeScript. Sets the value
- * of the detected OTP field. Does NOT submit the form (never-auto-submit).
- *
- * NOTE: this function is stringified and runs in the page context, not in
- * the extension's content-script context. Keep it dependency-free.
- */
-function fillInPage(code: string) {
-  const fields = document.querySelectorAll<HTMLInputElement>(
-    'input[autocomplete="one-time-code"], input[inputmode="numeric"][name*="otp" i], input[inputmode="numeric"][name*="code" i], input[inputmode="numeric"][name*="token" i], input[inputmode="numeric"][name*="2fa" i], input[name*="twofactor" i]',
-  );
-  const target = fields[0];
-  if (!target) {
-    console.warn("Keytap: no OTP field detected on this page");
-    return;
-  }
-  // Set value + dispatch events so frameworks (React, Vue) pick up the change.
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-  setter?.call(target, code);
-  target.dispatchEvent(new Event("input", { bubbles: true }));
-  target.dispatchEvent(new Event("change", { bubbles: true }));
-  target.focus({ preventScroll: true });
 }

@@ -6,7 +6,7 @@
  * native host. It is pure presentation + time math.
  */
 
-export { cn } from "@/lib/utils";
+export { cn } from "../../../lib/utils";
 
 /**
  * Format a millisecond countdown as "M:SS" (or just "SS" if < 60s).

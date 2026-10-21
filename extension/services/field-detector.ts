@@ -121,9 +121,8 @@ export function uniqueSelector(el: Element): string {
       parts.unshift(tag);
       break;
     }
-    const siblings = Array.from(parent.children).filter(
-      (c: Element) => c.tagName === cur!.tagName,
-    );
+    const currentTagName = cur.tagName;
+    const siblings = [...parent.children].filter((c) => c.tagName === currentTagName);
     if (siblings.length === 1) {
       parts.unshift(tag);
     } else {
