@@ -75,7 +75,7 @@ export function createMockBackend(opts?: { hostVersion?: string }): PopupBackend
         const raw = localStorage.getItem("keytap:settings");
         if (raw) {
           try {
-            return { ...DEFAULT_SETTINGS, ...JSON.parse(raw), neverAutoSubmit: true };
+            return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
           } catch {
             // Ignore malformed demo settings.
           }

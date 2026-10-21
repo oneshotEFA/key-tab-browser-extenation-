@@ -49,15 +49,8 @@ export function SettingsDialog({
   settings: PopupSettings;
   onChange: (next: PopupSettings) => void;
 }) {
-  // Force neverAutoSubmit on every render — it is a hard invariant.
-  useEffect(() => {
-    if (!settings.neverAutoSubmit) {
-      onChange({ ...settings, neverAutoSubmit: true });
-    }
-  }, [settings, onChange]);
-
   function patch(p: Partial<PopupSettings>) {
-    onChange({ ...settings, ...p, neverAutoSubmit: true });
+    onChange({ ...settings, ...p });
   }
 
   return (
@@ -139,13 +132,10 @@ export function SettingsDialog({
             onChange={(v) => patch({ requireReauthForExport: v })}
           />
           <ToggleRow
-            label="Never auto-submit"
-            description="Codes are filled, never submitted. This is a hard security invariant and cannot be turned off."
-            checked
-            disabled
-            onChange={() => {
-              /* no-op */
-            }}
+            label="Auto-submit after fill"
+            description="Automatically press Enter or submit the form when a code is filled."
+            checked={settings.autoSubmit}
+            onChange={(v) => patch({ autoSubmit: v })}
           />
 
           <Separator />

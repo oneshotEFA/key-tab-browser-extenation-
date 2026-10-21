@@ -32,6 +32,7 @@ export default defineContentScript({
       let matchInfo: {
         hasMatch: boolean;
         vaultLocked?: boolean;
+        hasSavedPassphrase?: boolean;
         account?: { id: string; issuer: string; label: string };
       };
 
@@ -84,21 +85,110 @@ export default defineContentScript({
       pill.appendChild(textSpan);
 
       pill.addEventListener("mouseenter", () => {
-        pill.style.transform = "scale(1.02)";
-        pill.style.backgroundColor = "#1e293b";
+        if (!pill.querySelector("input")) {
+          pill.style.transform = "scale(1.02)";
+          pill.style.backgroundColor = "#1e293b";
+        }
       });
       pill.addEventListener("mouseleave", () => {
-        pill.style.transform = "scale(1)";
-        pill.style.backgroundColor = "#0f172a";
+        if (!pill.querySelector("input")) {
+          pill.style.transform = "scale(1)";
+          pill.style.backgroundColor = "#0f172a";
+        }
       });
 
       pill.addEventListener("mousedown", (e) => {
-        e.preventDefault(); // prevent input blur
+        // Only prevent default if not clicking inside an input element
+        if ((e.target as HTMLElement)?.tagName !== "INPUT") {
+          e.preventDefault();
+        }
       });
 
+      function renderInlinePassphrasePrompt() {
+        pill.innerHTML = "";
+        pill.style.cursor = "default";
+        pill.style.transform = "scale(1)";
+        pill.style.backgroundColor = "#0f172a";
+
+        const form = document.createElement("form");
+        form.style.display = "flex";
+        form.style.alignItems = "center";
+        form.style.gap = "6px";
+        form.style.margin = "0";
+
+        const inputEl = document.createElement("input");
+        inputEl.type = "password";
+        inputEl.placeholder = "Vault passphrase";
+        inputEl.style.padding = "4px 8px";
+        inputEl.style.borderRadius = "6px";
+        inputEl.style.border = "1px solid rgba(255, 255, 255, 0.25)";
+        inputEl.style.backgroundColor = "rgba(255, 255, 255, 0.1)";
+        inputEl.style.color = "#fff";
+        inputEl.style.fontSize = "11px";
+        inputEl.style.outline = "none";
+        inputEl.style.width = "130px";
+
+        const submitBtn = document.createElement("button");
+        submitBtn.type = "submit";
+        submitBtn.textContent = "Unlock & Fill";
+        submitBtn.style.padding = "4px 10px";
+        submitBtn.style.borderRadius = "6px";
+        submitBtn.style.border = "none";
+        submitBtn.style.backgroundColor = "#2563eb";
+        submitBtn.style.color = "#fff";
+        submitBtn.style.fontSize = "11px";
+        submitBtn.style.fontWeight = "600";
+        submitBtn.style.cursor = "pointer";
+
+        form.appendChild(inputEl);
+        form.appendChild(submitBtn);
+        pill.appendChild(form);
+
+        setTimeout(() => inputEl.focus(), 50);
+
+        form.addEventListener("submit", async (ev) => {
+          ev.preventDefault();
+          const pass = inputEl.value.trim();
+          if (!pass) return;
+
+          submitBtn.textContent = "Unlocking…";
+          submitBtn.disabled = true;
+
+          try {
+            const fillRes = await chrome.runtime.sendMessage({
+              type: "keytap:fill-active-tab",
+              accountId: matchInfo.account!.id,
+              origin: window.location.origin,
+              passphrase: pass,
+            });
+
+            if (fillRes?.ok) {
+              pill.innerHTML = "<span>✓ 2FA code filled & submitted!</span>";
+              pill.style.backgroundColor = "#065f46";
+              setTimeout(removePill, 1200);
+            } else {
+              submitBtn.textContent = "Unlock & Fill";
+              submitBtn.disabled = false;
+              inputEl.style.borderColor = "#ef4444";
+            }
+          } catch {
+            submitBtn.textContent = "Failed";
+            setTimeout(removePill, 1500);
+          }
+        });
+      }
+
       pill.addEventListener("click", async (e) => {
+        // If clicking inside the form, ignore
+        if (pill.querySelector("form")) return;
+
         e.preventDefault();
         e.stopPropagation();
+
+        if (matchInfo.vaultLocked && !matchInfo.hasSavedPassphrase) {
+          renderInlinePassphrasePrompt();
+          return;
+        }
 
         textSpan.textContent = "Touch ID / Passcode required…";
         pill.style.cursor = "wait";
@@ -112,7 +202,7 @@ export default defineContentScript({
             return;
           }
 
-          textSpan.textContent = "Filling code…";
+          textSpan.textContent = "Filling & submitting…";
 
           const fillRes = await chrome.runtime.sendMessage({
             type: "keytap:fill-active-tab",
@@ -121,14 +211,18 @@ export default defineContentScript({
           });
 
           if (fillRes?.ok) {
-            textSpan.textContent = "✓ 2FA code filled!";
+            textSpan.textContent = "✓ 2FA code filled & submitted!";
             pill.style.backgroundColor = "#065f46"; // emerald
             setTimeout(removePill, 1200);
           } else {
-            textSpan.textContent = fillRes?.error || "Autofill failed";
-            setTimeout(removePill, 2000);
+            if (fillRes?.error?.includes("Vault is locked")) {
+              renderInlinePassphrasePrompt();
+            } else {
+              textSpan.textContent = fillRes?.error || "Autofill failed";
+              setTimeout(removePill, 2000);
+            }
           }
-        } catch (err) {
+        } catch {
           textSpan.textContent = "Authentication failed";
           setTimeout(removePill, 1500);
         }
@@ -175,16 +269,24 @@ export default defineContentScript({
     });
 
     // Reposition on scroll or resize
-    window.addEventListener("scroll", () => {
-      if (currentTargetInput && activePill) {
-        positionPill(currentTargetInput, activePill);
-      }
-    }, { passive: true });
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (currentTargetInput && activePill) {
+          positionPill(currentTargetInput, activePill);
+        }
+      },
+      { passive: true },
+    );
 
-    window.addEventListener("resize", () => {
-      if (currentTargetInput && activePill) {
-        positionPill(currentTargetInput, activePill);
-      }
-    }, { passive: true });
+    window.addEventListener(
+      "resize",
+      () => {
+        if (currentTargetInput && activePill) {
+          positionPill(currentTargetInput, activePill);
+        }
+      },
+      { passive: true },
+    );
   },
 });

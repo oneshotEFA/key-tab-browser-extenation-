@@ -137,6 +137,11 @@ export function PopupApp({
         allOrigins: dedupe([a.origin, ...(a.additionalOrigins ?? [])]),
       }));
       setAccounts(popupAccounts);
+      if (!result.vaultLocked && popupAccounts.length > 0) {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          void chrome.storage.local.set({ "keytap:account_directory": popupAccounts });
+        }
+      }
       setStatus((prev) => ({
         vaultState: backend.isMock ? "demo" : result.vaultLocked ? "locked" : "unlocked",
         vaultLocked: result.vaultLocked,
@@ -165,7 +170,7 @@ export function PopupApp({
   useEffect(() => {
     void (async () => {
       const s = await backend.getSettings().catch(() => DEFAULT_SETTINGS);
-      setSettings({ ...s, neverAutoSubmit: true });
+      setSettings(s);
       await refreshAccounts();
       const st = await backend.getStatus().catch(() => null);
       if (st) {
@@ -341,10 +346,12 @@ export function PopupApp({
       });
       window.dispatchEvent(evt);
       toast.success(`Filled ${otp.code} into OTP field`, {
-        description: "Form was NOT submitted (never-auto-submit is on).",
+        description: settings.autoSubmit
+          ? "Code filled and submitted automatically."
+          : "Form was NOT submitted (auto-submit is turned off).",
       });
     },
-    [activeOrigin, codes, backend],
+    [activeOrigin, codes, backend, settings.autoSubmit],
   );
 
   const handleLock = useCallback(async () => {
@@ -412,6 +419,9 @@ export function PopupApp({
         if (!backend.importAccount) throw new Error("This native host build does not support account import yet. Rebuild and reinstall the native host.");
         await backend.importAccount(uri, effectiveOrigin, passphrase);
       }
+      if (typeof chrome !== "undefined" && chrome.storage?.local && passphrase) {
+        await chrome.storage.local.set({ "keytap:biometric_passphrase": passphrase.trim() });
+      }
       await refreshAccounts();
       const st = await backend.getStatus().catch(() => null);
       if (st) setStatus({ vaultState: backend.isMock ? "demo" : st.vaultLocked ? "locked" : "unlocked", vaultLocked: st.vaultLocked, vaultExists: st.vaultExists, autoLockAt: st.autoLockAt, sessionExpiresAt: st.sessionExpiresAt, hostVersion: hostVersionLabel ?? backend.hostVersionLabel });
@@ -446,6 +456,10 @@ export function PopupApp({
         }
       }
 
+      if (typeof chrome !== "undefined" && chrome.storage?.local && passphrase && succeeded > 0) {
+        await chrome.storage.local.set({ "keytap:biometric_passphrase": passphrase.trim() });
+      }
+
       await refreshAccounts();
       const st = await backend.getStatus().catch(() => null);
       if (st) {
@@ -477,6 +491,9 @@ export function PopupApp({
   const handleUnlock = useCallback(async (passphrase: string) => {
     if (!backend.unlockVault) throw new Error("Vault unlock is unavailable in this host build.");
     await backend.unlockVault(passphrase);
+    if (typeof chrome !== "undefined" && chrome.storage?.local && passphrase) {
+      await chrome.storage.local.set({ "keytap:biometric_passphrase": passphrase.trim() });
+    }
     await refreshAccounts();
     const st = await backend.getStatus();
     if (st) setStatus({ vaultState: st.vaultLocked ? "locked" : "unlocked", vaultLocked: st.vaultLocked, vaultExists: st.vaultExists, autoLockAt: st.autoLockAt, sessionExpiresAt: st.sessionExpiresAt, hostVersion: hostVersionLabel ?? backend.hostVersionLabel });
@@ -992,7 +1009,7 @@ function EditOriginDialog({
         const raw = localStorage.getItem("keytap:settings");
         if (raw) {
           try {
-            return { ...DEFAULT_SETTINGS, ...JSON.parse(raw), neverAutoSubmit: true };
+            return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
           } catch {
             // ignore
           }

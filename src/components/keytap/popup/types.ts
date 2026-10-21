@@ -74,11 +74,10 @@ export interface PopupSettings {
   /** Require OS re-auth before exporting the encrypted vault backup. */
   requireReauthForExport: boolean;
   /**
-   * If true, autofill places the code into the OTP field but does NOT
-   * submit the form. ALWAYS on; UI exposes it as a read-only toggle.
-   * This is a hard security invariant.
+   * If true, autofill enters the code and automatically submits the form or presses Enter.
    */
-  neverAutoSubmit: true;
+  autoSubmit: boolean;
+  neverAutoSubmit?: boolean;
   /** UI theme. */
   theme: "light" | "system" | "dark";
 }
@@ -90,6 +89,6 @@ export const DEFAULT_SETTINGS: PopupSettings = {
   lockOnOsLock: true,
   requireReauthForDelete: true,
   requireReauthForExport: true,
-  neverAutoSubmit: true,
+  autoSubmit: true,
   theme: "system",
 };

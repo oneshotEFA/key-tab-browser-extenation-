@@ -53,13 +53,13 @@ export function isCodeSafeToFill(expiresAt: number, now: number = Date.now()): b
 
 /**
  * Execute the fill: inject a script into the tab that sets the value of
- * the detected OTP input. Never submits the form.
+ * the detected OTP input. Optionally submits the form automatically.
  */
-export async function executeFill(tabId: number, code: string): Promise<void> {
+export async function executeFill(tabId: number, code: string, autoSubmit: boolean = true): Promise<void> {
   await chrome.scripting.executeScript({
     target: { tabId },
     func: fillInPage,
-    args: [code],
+    args: [code, autoSubmit],
   });
 }
 
@@ -71,7 +71,7 @@ export async function executeFill(tabId: number, code: string): Promise<void> {
  * but inlined here because we can't import across the page/extension
  * boundary.
  */
-function fillInPage(code: string) {
+function fillInPage(code: string, autoSubmit: boolean = true) {
   const cleanCode = code.replace(/\D/g, "");
   if (!cleanCode) return;
 
@@ -83,6 +83,65 @@ function fillInPage(code: string) {
     setter?.call(el, val);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function triggerSubmit(el: HTMLInputElement) {
+    if (!autoSubmit) return;
+    setTimeout(() => {
+      // 1. Dispatch Enter key events (keydown, keypress, keyup)
+      const eventOpts: KeyboardEventInit = {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      };
+      el.dispatchEvent(new KeyboardEvent("keydown", eventOpts));
+      el.dispatchEvent(new KeyboardEvent("keypress", eventOpts));
+      el.dispatchEvent(new KeyboardEvent("keyup", eventOpts));
+
+      // 2. Check if element belongs to a <form>
+      const form = el.form || el.closest("form");
+      if (form) {
+        // Look for submit button
+        const submitBtn = form.querySelector<HTMLElement>(
+          'button[type="submit"], input[type="submit"], button:not([type="button"])'
+        );
+        if (submitBtn && !submitBtn.hasAttribute("disabled")) {
+          submitBtn.click();
+          return;
+        }
+        try {
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            return;
+          }
+        } catch {
+          // fall through
+        }
+      }
+
+      // 3. Look for nearby submit/verify buttons (common in modern SPAs/modals)
+      const container =
+        el.closest('[role="dialog"], [role="region"], div[class*="modal" i], div[class*="dialog" i], div[class*="form" i]') ||
+        document.body;
+      const buttons = Array.from(
+        container.querySelectorAll<HTMLElement>("button, [role='button'], input[type='button'], input[type='submit']")
+      );
+      const actionBtn = buttons.find((btn) => {
+        const text = (btn.textContent || btn.getAttribute("value") || btn.getAttribute("aria-label") || "").trim().toLowerCase();
+        return (
+          /^(verify|submit|continue|confirm|next|sign\s*in|log\s*in|done|authenticate)$/i.test(text) ||
+          text.includes("verify") ||
+          text.includes("submit") ||
+          text.includes("continue")
+        );
+      });
+      if (actionBtn && !actionBtn.hasAttribute("disabled")) {
+        actionBtn.click();
+      }
+    }, 80);
   }
 
   // 1. Check for segmented inputs (multiple single-digit inputs, e.g. 6 boxes)
@@ -99,7 +158,9 @@ function fillInPage(code: string) {
     for (let i = 0; i < Math.min(singleDigitInputs.length, cleanCode.length); i++) {
       setInputValue(singleDigitInputs[i], cleanCode[i]);
     }
-    singleDigitInputs[Math.min(cleanCode.length - 1, singleDigitInputs.length - 1)].focus({ preventScroll: true });
+    const lastInput = singleDigitInputs[Math.min(cleanCode.length - 1, singleDigitInputs.length - 1)];
+    lastInput.focus({ preventScroll: true });
+    triggerSubmit(lastInput);
     return;
   }
 
@@ -149,7 +210,7 @@ function fillInPage(code: string) {
   }
 
   target.focus({ preventScroll: true });
-  // SECURITY: do NOT call target.form?.submit() or dispatch a keydown Enter.
+  triggerSubmit(target);
 }
 
 /**

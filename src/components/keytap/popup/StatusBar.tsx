@@ -60,7 +60,7 @@ export function StatusBar({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {settings.neverAutoSubmit && <span className="hidden sm:inline">· no auto-submit</span>}
+        {!settings.autoSubmit && <span className="hidden sm:inline">· no auto-submit</span>}
         <span className="font-mono tabular-nums">
           v{status?.hostVersion ?? "0.0.0"}
         </span>

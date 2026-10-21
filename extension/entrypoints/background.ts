@@ -89,6 +89,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
         const resp = await sendRequest(p, msg.request);
+        if (resp.type !== "error") {
+          // If request was unlockVault or addAccount with passphrase, save it for Touch ID unlock!
+          const reqPayload = msg.request.payload as Record<string, unknown> | undefined;
+          if (
+            (msg.request.type === "unlockVault" || msg.request.type === "addAccount") &&
+            typeof reqPayload?.passphrase === "string" &&
+            reqPayload.passphrase.trim()
+          ) {
+            await chrome.storage.local.set({ "keytap:biometric_passphrase": reqPayload.passphrase.trim() });
+          }
+          // If response contains accounts, cache directory for matching even when vault locks!
+          if (resp.type === "accounts" && Array.isArray(resp.payload?.accounts)) {
+            await chrome.storage.local.set({ "keytap:account_directory": resp.payload.accounts });
+          }
+        }
         sendResponse({ ok: true, response: resp });
       } catch (e) {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -127,24 +142,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: "native host unavailable" });
           return;
         }
-        const resp = await requestListAccounts(p);
-        if (resp.vaultLocked) {
-          sendResponse({ ok: true, hasMatch: false, vaultLocked: true });
-          return;
+
+        let accounts: Array<{ id: string; issuer: string; label: string; origin: string; additionalOrigins?: string[] }> = [];
+        let isLocked = true;
+
+        try {
+          const resp = await requestListAccounts(p);
+          isLocked = resp.vaultLocked;
+          if (!isLocked && Array.isArray(resp.accounts) && resp.accounts.length > 0) {
+            accounts = resp.accounts;
+            await chrome.storage.local.set({ "keytap:account_directory": accounts });
+          }
+        } catch {
+          // host might be starting or locked
         }
-        const match = resp.accounts.find((a) => {
+
+        // If vault is locked or returned no accounts, check cached directory
+        if (accounts.length === 0) {
+          const stored = await chrome.storage.local.get("keytap:account_directory");
+          if (Array.isArray(stored["keytap:account_directory"])) {
+            accounts = stored["keytap:account_directory"];
+          }
+        }
+
+        const match = accounts.find((a) => {
           const allowed = [a.origin, ...(a.additionalOrigins ?? [])];
           return authorizeAutofill(allowed, msg.origin);
         });
+
+        // Check if a biometric passphrase is saved
+        const passStored = await chrome.storage.local.get("keytap:biometric_passphrase");
+        const hasSavedPassphrase = Boolean(passStored["keytap:biometric_passphrase"]);
+
         if (match) {
           sendResponse({
             ok: true,
             hasMatch: true,
-            vaultLocked: false,
+            vaultLocked: isLocked,
+            hasSavedPassphrase,
             account: { id: match.id, issuer: match.issuer, label: match.label },
           });
         } else {
-          sendResponse({ ok: true, hasMatch: false, vaultLocked: false });
+          sendResponse({ ok: true, hasMatch: false, vaultLocked: isLocked, hasSavedPassphrase });
         }
       } catch (e) {
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -160,6 +199,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           accountId: typeof msg.accountId === "string" ? msg.accountId : undefined,
           origin: msg.origin,
           tabId: sender.tab?.id,
+          passphrase: typeof msg.passphrase === "string" ? msg.passphrase : undefined,
         });
         sendResponse({ ok: true });
       } catch (e) {
@@ -174,27 +214,67 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 /**
  * Main autofill orchestrator. Picks the best-matching account (or uses
  * the caller-supplied accountId), asks the host for a fresh code, and
- * injects it into the active tab's OTP field.
+ * injects it into the active tab's OTP field. Automatically submits/enters code.
  */
 async function autofillActiveTab(opts?: {
   accountId?: string;
   origin?: string;
   tabId?: number;
+  passphrase?: string;
 }) {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url) {
+  const [tab] = opts?.tabId
+    ? [{ id: opts.tabId, url: undefined }]
+    : await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) {
     throw new Error("no active tab");
   }
-  const origin = opts?.origin ?? tabUrlToOrigin(tab.url);
+  const origin = opts?.origin ?? (tab.url ? tabUrlToOrigin(tab.url) : null);
   if (!origin) {
     throw new Error("active tab is not https://");
   }
 
-  // Choose account: prefer the one the popup pre-selected, else pick the
+  const p = ensurePort();
+  if (!p) throw new Error("native host unavailable");
+
+  // Check if vault is locked
+  let isLocked = true;
+  try {
+    const st = await sendRequest(p, { type: "getStatus", payload: {} });
+    if (st.type === "status") {
+      isLocked = st.payload.vaultLocked;
+    }
+  } catch {
+    // proceed
+  }
+
+  if (isLocked) {
+    // Determine passphrase to unlock vault
+    let passToUse = opts?.passphrase;
+    if (!passToUse) {
+      const stored = await chrome.storage.local.get("keytap:biometric_passphrase");
+      passToUse = stored["keytap:biometric_passphrase"];
+    }
+
+    if (passToUse) {
+      const unlockResp = await sendRequest(p, {
+        type: "unlockVault",
+        payload: { passphrase: passToUse },
+      });
+      if (unlockResp.type === "error") {
+        throw new Error(unlockResp.payload.message || "vault unlock failed");
+      }
+      // Save for future biometric unlocks
+      await chrome.storage.local.set({ "keytap:biometric_passphrase": passToUse });
+    } else {
+      throw new Error("Vault is locked. Enter your passphrase once to enable Touch ID autofill.");
+    }
+  }
+
+  // Choose account: prefer the one the caller pre-selected, else pick the
   // first account whose origin list matches.
   let accountId = opts?.accountId;
   if (!accountId) {
-    const accounts = await requestListAccounts(ensurePort());
+    const accounts = await requestListAccounts(p);
     for (const a of accounts.accounts) {
       const allowed = [a.origin, ...(a.additionalOrigins ?? [])];
       if (authorizeAutofill(allowed, origin)) {
@@ -208,7 +288,7 @@ async function autofillActiveTab(opts?: {
   }
 
   // Get a fresh code from the host.
-  const resp = await requestGetCode(ensurePort(), { accountId, origin, tabId: tab.id });
+  const resp = await requestGetCode(p, { accountId, origin, tabId: tab.id });
 
   // Refuse to fill an expired or about-to-expire code.
   if (!isCodeSafeToFill(resp.expiresAt)) {
@@ -217,9 +297,13 @@ async function autofillActiveTab(opts?: {
     );
   }
 
-  // Inject via chrome.scripting. Never submits the form.
-  await executeFill(tab.id, resp.code);
-  console.info("[keytap:bg] filled code for account=%s origin=%s", accountId, origin);
+  // Read settings for autoSubmit preference (defaults to true)
+  const storedSettings = await chrome.storage.local.get("keytap:settings");
+  const autoSubmit = storedSettings["keytap:settings"]?.autoSubmit ?? true;
+
+  // Inject via chrome.scripting. Fills and clicks Enter/Submit!
+  await executeFill(tab.id, resp.code, autoSubmit);
+  console.info("[keytap:bg] filled code for account=%s origin=%s autoSubmit=%s", accountId, origin, autoSubmit);
 }
 
 function tabUrlToOrigin(url: string): string | null {

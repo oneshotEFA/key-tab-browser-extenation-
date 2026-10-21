@@ -42,7 +42,7 @@ const DEFAULT_SETTINGS: PopupSettings = {
   lockOnOsLock: true,
   requireReauthForDelete: true,
   requireReauthForExport: true,
-  neverAutoSubmit: true,
+  autoSubmit: true,
   theme: "system",
 };
 
@@ -374,13 +374,13 @@ export function createNativeBackend(): PopupBackend {
       const stored = await chrome.storage.local.get("keytap:settings");
       const raw = stored["keytap:settings"];
       if (raw && typeof raw === "object") {
-        settingsRef.current = { ...DEFAULT_SETTINGS, ...(raw as Partial<PopupSettings>), neverAutoSubmit: true };
+        settingsRef.current = { ...DEFAULT_SETTINGS, ...(raw as Partial<PopupSettings>) };
       }
       return { ...settingsRef.current };
     },
 
     async saveSettings(next: PopupSettings) {
-      settingsRef.current = { ...next, neverAutoSubmit: true };
+      settingsRef.current = { ...next };
       await chrome.storage.local.set({ "keytap:settings": settingsRef.current });
     },
 
