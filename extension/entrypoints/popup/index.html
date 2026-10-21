@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Keytap</title>
+    <style>
+      /* Reset: the popup window is fixed 360x560. No scrollbars on body. */
+      html, body { margin: 0; padding: 0; width: 360px; height: 560px; overflow: hidden; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #ffffff;
+        color: #0a0a0a;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0a0a0a; color: #fafafa; }
+      }
+      html.dark body { background: #0a0a0a; color: #fafafa; }
+      #root { width: 360px; height: 560px; }
+      /* SVG lucide icons inherit color via currentColor. */
+      svg { display: inline-block; vertical-align: middle; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

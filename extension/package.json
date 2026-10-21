@@ -1,0 +1,28 @@
+{
+  "name": "@keytap/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Keytap — local-first 2FA/TOTP autofill browser extension (Chrome MV3).",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.525.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sonner": "^2.0.6",
+    "tldts": "^7.4.18"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@wxt-dev/module-react": "^1.1.3",
+    "typescript": "^5.6.3",
+    "wxt": "^0.20.0"
+  }
+}

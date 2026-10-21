@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Keytap Test Login</title>
+    <style>
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        max-width: 420px;
+        margin: 64px auto;
+        padding: 24px;
+        background: #fafafa;
+        color: #0a0a0a;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.subtle { font-size: 12px; color: #666; margin: 0 0 24px; }
+      form { display: flex; flex-direction: column; gap: 12px; }
+      label { font-size: 12px; font-weight: 600; }
+      input {
+        font: inherit;
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        font-size: 14px;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        letter-spacing: 0.2em;
+      }
+      input:focus { outline: 2px solid #333; outline-offset: 1px; }
+      button {
+        font: inherit;
+        padding: 8px 12px;
+        border: 0;
+        border-radius: 6px;
+        background: #0a0a0a;
+        color: #fff;
+        cursor: pointer;
+      }
+      button:hover { background: #333; }
+      .hint {
+        margin-top: 24px;
+        font-size: 11px;
+        color: #999;
+        border-top: 1px solid #e0e0e0;
+        padding-top: 12px;
+      }
+      code {
+        background: #eee;
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-family: ui-monospace, SFMono-Regular, monospace;
+        letter-spacing: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Acme Corp — Verify your identity</h1>
+    <p class="subtle">
+      This is a synthetic test page. Open the Keytap extension popup, then
+      click Fill — the code will appear in the field below.
+    </p>
+
+    <form id="login" onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Form submitted (Keytap did NOT do this — never-auto-submit).';">
+      <div>
+        <label for="otp">Verification code</label>
+        <input
+          id="otp"
+          name="otp"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="7"
+          placeholder="000 000"
+          pattern="[0-9 ]{6,7}"
+          required
+        />
+      </div>
+      <button type="submit">Verify</button>
+    </form>
+
+    <div id="result" class="hint"></div>
+
+    <p class="hint">
+      <strong>Field spec:</strong> <code>autocomplete="one-time-code"</code>,
+      <code>inputmode="numeric"</code>, <code>name="otp"</code>. The
+      extension's field-detector rates this as HIGH confidence.
+    </p>
+  </body>
+</html>
