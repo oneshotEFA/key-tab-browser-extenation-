@@ -18,7 +18,9 @@
  *     extension's native-messaging service. Used in production builds.
  *
  * SECURITY INVARIANTS:
- *   1. The popup NEVER sees or stores a shared secret in production mode.
+ *   1. Outside explicit import, the popup never receives or persists shared
+ *      secrets. An import URI exists only transiently while the dialog is open
+ *      and is sent directly to the local native host for encrypted storage.
  *   2. getCode is requested per-account and the response is held only as
  *      long as the popup is open. When the popup closes, all in-memory
  *      codes are GC'd by the service worker.
@@ -29,8 +31,9 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { cn } from "@keytap/lib";
 import type { AccountSummary, GetCodeResponse, StatusPayload } from "@keytap/protocol";
 import {
   DEFAULT_SETTINGS,
@@ -45,10 +48,25 @@ import { SearchBar } from "./SearchBar";
 import { AccountList, originMatches } from "./AccountList";
 import { StatusBar } from "./StatusBar";
 import { AddAccountDialog } from "./AddAccountDialog";
+import { ImportAccountsDialog } from "./ImportAccountsDialog";
 import { SettingsDialog } from "./SettingsDialog";
 import {
   parseOtpAuthUri,
+  normalizeOrigin,
 } from "@keytap/lib";
+import { Globe2, ShieldCheck, ShieldX, Lock, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Button } from "../../ui/button";
+import { Input } from "../../ui/input";
+import { Label } from "../../ui/label";
+import { Alert, AlertDescription } from "../../ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
 
 // ---------------------------------------------------------------------------
 // PopupBackend interface
@@ -72,6 +90,10 @@ export interface PopupBackend {
    * native builds (the popup cannot add accounts in production).
    */
   addMockAccount?(uri: string): Promise<{ ok: true } | { ok: false; error: string }>;
+  importAccount?(uri: string, origin: string, passphrase: string): Promise<void>;
+  deleteAccount?(accountId: string): Promise<void>;
+  updateAccountOrigin?(accountId: string, origin: string): Promise<void>;
+  unlockVault?(passphrase: string): Promise<void>;
   /** Human-readable label for the status bar. */
   readonly hostVersionLabel: string;
   readonly isMock: boolean;
@@ -98,8 +120,13 @@ export function PopupApp({
   const [status, setStatus] = useState<PopupStatus | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [accountToDelete, setAccountToDelete] = useState<PopupAccount | null>(null);
+  const [accountToEditOrigin, setAccountToEditOrigin] = useState<PopupAccount | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdatingOrigin, setIsUpdatingOrigin] = useState(false);
 
   const refreshAccounts = useCallback(async () => {
     try {
@@ -111,11 +138,12 @@ export function PopupApp({
       }));
       setAccounts(popupAccounts);
       setStatus((prev) => ({
-        vaultState: backend.isMock ? "demo" : result.vaultLocked ? "locked" : prev?.vaultState ?? "unlocked",
+        vaultState: backend.isMock ? "demo" : result.vaultLocked ? "locked" : "unlocked",
         vaultLocked: result.vaultLocked,
         autoLockAt: prev?.autoLockAt ?? null,
         sessionExpiresAt: prev?.sessionExpiresAt ?? null,
         hostVersion: hostVersionLabel ?? backend.hostVersionLabel,
+        vaultExists: prev?.vaultExists ?? false,
       }));
     } catch (e) {
       setStatus({
@@ -147,6 +175,7 @@ export function PopupApp({
           autoLockAt: st.autoLockAt,
           sessionExpiresAt: st.sessionExpiresAt,
           hostVersion: hostVersionLabel ?? backend.hostVersionLabel,
+          vaultExists: st.vaultExists,
         });
       }
     })();
@@ -169,6 +198,7 @@ export function PopupApp({
           autoLockAt: st.autoLockAt,
           sessionExpiresAt: st.sessionExpiresAt,
           hostVersion: hostVersionLabel ?? backend.hostVersionLabel,
+          vaultExists: st.vaultExists,
         });
       }
     }, 10000);
@@ -210,7 +240,7 @@ export function PopupApp({
         ...Array.from(next.values()).map((o) => o.expiresAt - nowMs),
         30_000,
       );
-      const delay = Math.max(2_000, Math.min(minRemaining + 250, 30_000));
+      const delay = Math.max(300, Math.min(minRemaining + 100, 5_000));
       window.setTimeout(() => void refreshCodes(), delay);
     } finally {
       codeRefreshInFlight.current = false;
@@ -240,8 +270,24 @@ export function PopupApp({
 
   // Handlers
   const handleReveal = useCallback(
-    (account: PopupAccount) => {
-      const otp = codes.get(account.id);
+    async (account: PopupAccount) => {
+      let otp = codes.get(account.id);
+      if (!otp || otp.expiresAt <= Date.now() + 1000) {
+        try {
+          const resp = await backend.getCode(account.id, activeOrigin ?? account.origin);
+          otp = {
+            accountId: account.id,
+            code: resp.code,
+            issuedAt: resp.issuedAt,
+            expiresAt: resp.expiresAt,
+            period: 30,
+            digits: resp.code.length,
+          };
+          setCodes((prev) => new Map(prev).set(account.id, otp!));
+        } catch {
+          // fallback
+        }
+      }
       if (!otp) {
         toast.error("No code available", { description: "Try again in a moment." });
         return;
@@ -252,7 +298,7 @@ export function PopupApp({
         .then(() => toast.success(`Code copied: ${otp.code}`, { duration: 2000 }))
         .catch(() => toast.info(`Code: ${otp.code}`));
     },
-    [codes],
+    [codes, backend, activeOrigin],
   );
 
   const handleFill = useCallback(
@@ -267,7 +313,23 @@ export function PopupApp({
         });
         return;
       }
-      const otp = codes.get(account.id);
+      let otp = codes.get(account.id);
+      if (!otp || otp.expiresAt <= Date.now() + 2000) {
+        try {
+          const resp = await backend.getCode(account.id, activeOrigin);
+          otp = {
+            accountId: account.id,
+            code: resp.code,
+            issuedAt: resp.issuedAt,
+            expiresAt: resp.expiresAt,
+            period: 30,
+            digits: resp.code.length,
+          };
+          setCodes((prev) => new Map(prev).set(account.id, otp!));
+        } catch {
+          // fallback
+        }
+      }
       if (!otp) {
         toast.error("No code available");
         return;
@@ -282,7 +344,7 @@ export function PopupApp({
         description: "Form was NOT submitted (never-auto-submit is on).",
       });
     },
-    [activeOrigin, codes],
+    [activeOrigin, codes, backend],
   );
 
   const handleLock = useCallback(async () => {
@@ -339,6 +401,144 @@ export function PopupApp({
     [backend],
   );
 
+  const handleImport = useCallback(
+    async (uri: string, passphrase: string, targetOrigin?: string) => {
+      const effectiveOrigin = targetOrigin || activeOrigin;
+      if (backend.isMock) {
+        const result = await backend.addMockAccount?.(uri);
+        if (!result || !result.ok) throw new Error(result?.error ?? "Demo import is unavailable");
+      } else {
+        if (!effectiveOrigin) throw new Error("Open the website this account belongs to before importing, or enter its domain.");
+        if (!backend.importAccount) throw new Error("This native host build does not support account import yet. Rebuild and reinstall the native host.");
+        await backend.importAccount(uri, effectiveOrigin, passphrase);
+      }
+      await refreshAccounts();
+      const st = await backend.getStatus().catch(() => null);
+      if (st) setStatus({ vaultState: backend.isMock ? "demo" : st.vaultLocked ? "locked" : "unlocked", vaultLocked: st.vaultLocked, vaultExists: st.vaultExists, autoLockAt: st.autoLockAt, sessionExpiresAt: st.sessionExpiresAt, hostVersion: hostVersionLabel ?? backend.hostVersionLabel });
+    },
+    [backend, activeOrigin, refreshAccounts, hostVersionLabel],
+  );
+
+  const handleImportBatch = useCallback(
+    async (
+      items: Array<{ uri: string; origin: string }>,
+      passphrase: string,
+    ): Promise<{ succeeded: number; failed: number }> => {
+      let succeeded = 0;
+      let failed = 0;
+
+      for (const item of items) {
+        try {
+          if (backend.isMock) {
+            const res = await backend.addMockAccount?.(item.uri);
+            if (res && res.ok) succeeded++;
+            else failed++;
+          } else {
+            if (!backend.importAccount) {
+              throw new Error("This native host build does not support account import yet.");
+            }
+            await backend.importAccount(item.uri, item.origin, passphrase);
+            succeeded++;
+          }
+        } catch (e) {
+          console.error("Failed importing account:", item.origin, e);
+          failed++;
+        }
+      }
+
+      await refreshAccounts();
+      const st = await backend.getStatus().catch(() => null);
+      if (st) {
+        setStatus({
+          vaultState: backend.isMock ? "demo" : st.vaultLocked ? "locked" : "unlocked",
+          vaultLocked: st.vaultLocked,
+          vaultExists: st.vaultExists,
+          autoLockAt: st.autoLockAt,
+          sessionExpiresAt: st.sessionExpiresAt,
+          hostVersion: hostVersionLabel ?? backend.hostVersionLabel,
+        });
+      }
+
+      if (succeeded > 0) {
+        toast.success(`Imported ${succeeded} account${succeeded === 1 ? "" : "s"} successfully`, {
+          description: failed > 0 ? `${failed} account(s) could not be saved.` : undefined,
+        });
+      } else if (failed > 0) {
+        toast.error("Failed to import accounts", {
+          description: "Check your vault passphrase and try again.",
+        });
+      }
+
+      return { succeeded, failed };
+    },
+    [backend, refreshAccounts, hostVersionLabel],
+  );
+
+  const handleUnlock = useCallback(async (passphrase: string) => {
+    if (!backend.unlockVault) throw new Error("Vault unlock is unavailable in this host build.");
+    await backend.unlockVault(passphrase);
+    await refreshAccounts();
+    const st = await backend.getStatus();
+    if (st) setStatus({ vaultState: st.vaultLocked ? "locked" : "unlocked", vaultLocked: st.vaultLocked, vaultExists: st.vaultExists, autoLockAt: st.autoLockAt, sessionExpiresAt: st.sessionExpiresAt, hostVersion: hostVersionLabel ?? backend.hostVersionLabel });
+  }, [backend, refreshAccounts, hostVersionLabel]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!accountToDelete) return;
+    setIsDeleting(true);
+    try {
+      if (backend.isMock) {
+        await backend.deleteAccount?.(accountToDelete.id);
+      } else {
+        if (!backend.deleteAccount) {
+          throw new Error("This native host build does not support account deletion yet.");
+        }
+        await backend.deleteAccount(accountToDelete.id);
+      }
+      await refreshAccounts();
+      toast.success("Account deleted", {
+        description: `${accountToDelete.issuer || accountToDelete.label} was removed from your vault.`,
+      });
+      setAccountToDelete(null);
+    } catch (e) {
+      toast.error("Could not delete account", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [accountToDelete, backend, refreshAccounts]);
+
+  const handleUpdateOrigin = useCallback(
+    async (accountId: string, newOrigin: string) => {
+      const normalized = normalizeOrigin(newOrigin);
+      if (!normalized) {
+        toast.error("Invalid website domain", {
+          description: "Please enter a valid domain (e.g. github.com or https://github.com).",
+        });
+        return;
+      }
+      setIsUpdatingOrigin(true);
+      try {
+        if (!backend.updateAccountOrigin) {
+          throw new Error("Updating origins is not supported by this backend build.");
+        }
+        await backend.updateAccountOrigin(accountId, normalized);
+        await refreshAccounts();
+        toast.success("Website updated", {
+          description: `Account is now authorized to autofill on ${normalized}.`,
+        });
+        setAccountToEditOrigin(null);
+      } catch (e) {
+        toast.error("Could not update website", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      } finally {
+        setIsUpdatingOrigin(false);
+      }
+    },
+    [backend, refreshAccounts],
+  );
+
   const vaultState: VaultState = status?.vaultState ?? (backend.isMock ? "demo" : "host-down");
   const canLock = backend.isMock ? true : vaultState === "unlocked";
 
@@ -347,16 +547,28 @@ export function PopupApp({
       <TopBar
         vaultState={vaultState}
         onAdd={() => setShowAdd(true)}
+        onImport={() => setShowImport(true)}
         onSettings={() => setShowSettings(true)}
         onLock={handleLock}
         canLock={canLock}
       />
-      <SearchBar value={search} onChange={setSearch} />
+      <ActiveSitePanel origin={activeOrigin} vaultState={vaultState} />
+      {vaultState !== "locked" && vaultState !== "host-down" && (
+        <SearchBar value={search} onChange={setSearch} />
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {loading && accounts.length === 0 ? (
+        {loading ? (
           <div className="flex h-full items-center justify-center">
             <Spinner />
           </div>
+        ) : vaultState === "host-down" ? (
+          <HostDownView />
+        ) : vaultState === "locked" ? (
+          <VaultLockedView
+            vaultExists={status?.vaultExists ?? false}
+            onUnlock={handleUnlock}
+            onAddAccount={() => setShowAdd(true)}
+          />
         ) : (
           <AccountList
             accounts={accounts}
@@ -366,6 +578,8 @@ export function PopupApp({
             search={search}
             onReveal={handleReveal}
             onFill={handleFill}
+            onDelete={setAccountToDelete}
+            onEditOrigin={setAccountToEditOrigin}
           />
         )}
       </div>
@@ -376,12 +590,42 @@ export function PopupApp({
         onOpenChange={setShowAdd}
         mockMode={backend.isMock}
         onAddMock={handleAddMock}
+        origin={activeOrigin}
+        vaultExists={status?.vaultExists ?? false}
+        vaultLocked={status?.vaultLocked ?? !backend.isMock}
+        onImport={handleImport}
+        onUnlock={handleUnlock}
+      />
+      <ImportAccountsDialog
+        open={showImport}
+        onOpenChange={setShowImport}
+        mockMode={backend.isMock}
+        activeOrigin={activeOrigin}
+        vaultExists={status?.vaultExists ?? false}
+        vaultLocked={status?.vaultLocked ?? !backend.isMock}
+        onImportBatch={handleImportBatch}
+        onUnlock={handleUnlock}
       />
       <SettingsDialog
         open={showSettings}
         onOpenChange={setShowSettings}
         settings={settings}
         onChange={saveSettings}
+      />
+      <DeleteAccountDialog
+        open={!!accountToDelete}
+        account={accountToDelete}
+        isDeleting={isDeleting}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setAccountToDelete(null)}
+      />
+      <EditOriginDialog
+        open={!!accountToEditOrigin}
+        account={accountToEditOrigin}
+        activeOrigin={activeOrigin}
+        isUpdating={isUpdatingOrigin}
+        onConfirm={handleUpdateOrigin}
+        onCancel={() => setAccountToEditOrigin(null)}
       />
     </div>
   );
@@ -394,6 +638,284 @@ function dedupe(xs: string[]): string[] {
 function Spinner() {
   return (
     <span className="inline-block size-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-foreground" />
+  );
+}
+
+function ActiveSitePanel({
+  origin,
+  vaultState,
+}: {
+  origin: string | null;
+  vaultState: VaultState;
+}) {
+  const label = origin ? origin.replace(/^https?:\/\//, "") : "No supported website";
+  const isUnavailable = !origin;
+  const isHostDown = vaultState === "host-down";
+
+  return (
+    <section
+      className={cn(
+        "mx-3 mt-3 rounded-xl border px-3 py-2.5",
+        isUnavailable || isHostDown
+          ? "border-amber-200 bg-amber-50/80 dark:border-amber-900/70 dark:bg-amber-950/20"
+          : "border-emerald-200 bg-emerald-50/80 dark:border-emerald-900/70 dark:bg-emerald-950/20",
+      )}
+      aria-live="polite"
+    >
+      <div className="flex items-start gap-2.5">
+        <span
+          className={cn(
+            "mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg",
+            isUnavailable || isHostDown
+              ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300"
+              : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300",
+          )}
+        >
+          {isUnavailable || isHostDown ? <ShieldX className="size-4" /> : <Globe2 className="size-4" />}
+        </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Current website
+            {!isUnavailable && !isHostDown && <ShieldCheck className="size-3.5 text-emerald-600" />}
+          </div>
+          <p className="mt-0.5 truncate text-sm font-semibold" title={origin ?? undefined}>
+            {label}
+          </p>
+          <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+            {isHostDown
+              ? "The native host is unavailable. Reopen Keytap after starting it."
+              : isUnavailable
+                ? "Open a regular website to enable secure autofill."
+                : "Only accounts authorized for this exact origin can be filled."}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VaultLockedView({
+  vaultExists,
+  onUnlock,
+  onAddAccount,
+}: {
+  vaultExists: boolean;
+  onUnlock: (passphrase: string) => Promise<void>;
+  onAddAccount: () => void;
+}) {
+  const [passphrase, setPassphrase] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!passphrase.trim() || busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await onUnlock(passphrase);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!vaultExists) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+        <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <KeyRound className="size-7" />
+        </div>
+        <h2 className="text-base font-semibold">Welcome to Keytap</h2>
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          No vault found. Add your first 2FA account to create your encrypted vault.
+        </p>
+        <Button onClick={onAddAccount} className="mt-5 w-full gap-2">
+          <Plus className="size-4" />
+          Add first account
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-muted text-foreground">
+        <Lock className="size-7" />
+      </div>
+      <h2 className="text-base font-semibold">Vault is locked</h2>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        Enter your passphrase to access your 2FA accounts and autofill codes.
+      </p>
+
+      <form onSubmit={submit} className="mt-5 w-full space-y-3">
+        <Input
+          type="password"
+          placeholder="Vault passphrase"
+          value={passphrase}
+          onChange={(e) => setPassphrase(e.target.value)}
+          autoFocus
+          disabled={busy}
+          autoComplete="current-password"
+        />
+        {error && (
+          <Alert variant="destructive" className="py-2 text-left">
+            <AlertDescription className="break-all text-xs">{error}</AlertDescription>
+          </Alert>
+        )}
+        <Button type="submit" className="w-full" disabled={busy || !passphrase}>
+          {busy ? "Unlocking…" : "Unlock vault"}
+        </Button>
+      </form>
+    </div>
+  );
+}
+
+function HostDownView() {
+  return (
+    <div className="flex h-full flex-col items-center justify-center p-6 text-center">
+      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
+        <ShieldX className="size-7" />
+      </div>
+      <h2 className="text-base font-semibold">Native host unavailable</h2>
+      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        Keytap cannot connect to its local native host. Please ensure the native host is registered and reload the extension.
+      </p>
+    </div>
+  );
+}
+
+function DeleteAccountDialog({
+  open,
+  account,
+  isDeleting,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  account: PopupAccount | null;
+  isDeleting: boolean;
+  onConfirm: () => Promise<void>;
+  onCancel: () => void;
+}) {
+  if (!account) return null;
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !isDeleting) onCancel(); }}>
+      <DialogContent className="max-w-[340px] p-4">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base text-destructive">
+            <Trash2 className="size-4" />
+            Delete account
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Are you sure you want to delete <span className="font-semibold text-foreground">{account.issuer || account.label}</span>? This will permanently remove the 2FA secret from your encrypted vault.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter className="mt-2 flex gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={isDeleting}>
+            Cancel
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => void onConfirm()} disabled={isDeleting}>
+            {isDeleting ? "Deleting…" : "Delete"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditOriginDialog({
+  open,
+  account,
+  activeOrigin,
+  isUpdating,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  account: PopupAccount | null;
+  activeOrigin: string | null;
+  isUpdating: boolean;
+  onConfirm: (accountId: string, newOrigin: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [domainInput, setDomainInput] = useState("");
+
+  useEffect(() => {
+    if (account) {
+      setDomainInput(account.origin.replace(/^https?:\/\//, ""));
+    }
+  }, [account]);
+
+  const normalized = normalizeOrigin(domainInput);
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o && !isUpdating) onCancel(); }}>
+      <DialogContent className="max-w-[340px] p-4">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Globe2 className="size-4 text-primary" />
+            Edit autofill website
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            Set the website domain where <span className="font-semibold text-foreground">{account?.issuer || account?.label}</span> should autofill.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3 py-1">
+          <div className="space-y-1.5">
+            <Label htmlFor="edit-domain" className="text-xs">
+              Website domain or URL
+            </Label>
+            <Input
+              id="edit-domain"
+              value={domainInput}
+              onChange={(e) => setDomainInput(e.target.value)}
+              placeholder="e.g. github.com"
+              className="font-mono text-xs h-8"
+              autoFocus
+            />
+          </div>
+
+          {activeOrigin && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full text-xs h-7 gap-1.5"
+              onClick={() => setDomainInput(activeOrigin.replace(/^https?:\/\//, ""))}
+            >
+              <Globe2 className="size-3 text-primary" />
+              Use current tab ({activeOrigin.replace(/^https?:\/\//, "")})
+            </Button>
+          )}
+
+          {normalized ? (
+            <div className="rounded-md border border-emerald-200 bg-emerald-50/50 p-2 text-[11px] text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-300">
+              Autofills on: <span className="font-mono font-semibold">{normalized}</span>
+            </div>
+          ) : (
+            <div className="rounded-md border border-amber-200 bg-amber-50/50 p-2 text-[11px] text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+              Enter a valid website domain so autofill can match.
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="pt-2">
+          <Button variant="ghost" size="sm" onClick={onCancel} disabled={isUpdating}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => account && void onConfirm(account.id, domainInput)}
+            disabled={isUpdating || !normalized}
+          >
+            {isUpdating ? "Saving…" : "Save website"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

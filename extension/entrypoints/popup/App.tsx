@@ -16,12 +16,14 @@ import { useEffect, useState } from "react";
 import type { PopupBackend } from "@keytap/popup/PopupApp";
 import { PopupApp } from "@keytap/popup/PopupApp";
 import { createNativeBackend } from "~/services/native-messaging";
-import { listenForFillEvents } from "~/services/autofill";
+import { executeFill, listenForFillEvents } from "~/services/autofill";
+import { promptTouchIdOrPasscode } from "~/services/biometrics";
+
+declare const __KEYTAP_MOCK__: boolean;
 
 // This compile-time constant lets production Rollup builds remove the entire
 // mock backend chunk, including its published RFC test vector.
-const IS_MOCK_BUILD =
-  (import.meta as { env?: Record<string, string | undefined> }).env?.KEYTAP_MOCK === "1";
+const IS_MOCK_BUILD = __KEYTAP_MOCK__;
 
 export function App() {
   const [backend, setBackend] = useState<PopupBackend | null>(null);
@@ -85,6 +87,18 @@ export function App() {
   useEffect(() => {
     const off = listenForFillEvents(async (detail) => {
       try {
+        const verified = await promptTouchIdOrPasscode("fill 2FA code");
+        if (!verified) {
+          console.warn("[keytap:popup] Touch ID / passcode verification cancelled by user");
+          return;
+        }
+
+        if (IS_MOCK_BUILD) {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id) throw new Error("no active tab");
+          await executeFill(tab.id, detail.code);
+          return;
+        }
         const response = await chrome.runtime.sendMessage({
           type: "keytap:fill-from-popup",
           accountId: detail.accountId,

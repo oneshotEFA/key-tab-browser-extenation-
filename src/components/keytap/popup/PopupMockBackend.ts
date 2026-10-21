@@ -62,6 +62,7 @@ export function createMockBackend(opts?: { hostVersion?: string }): PopupBackend
       const nowMs = Date.now();
       return {
         vaultLocked: false,
+        vaultExists: false,
         autoLockAt: nowMs + 5 * 60 * 1000,
         sessionExpiresAt: nowMs + 30 * 60 * 1000,
         hostVersion: opts?.hostVersion ?? "0.1.0-mock",
@@ -113,6 +114,18 @@ export function createMockBackend(opts?: { hostVersion?: string }): PopupBackend
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) } as const;
       }
+    },
+
+    async deleteAccount(accountId: string) {
+      assertMock();
+      mockAccounts = mockAccounts.filter((m) => m.id !== accountId);
+    },
+
+    async updateAccountOrigin(accountId: string, origin: string) {
+      assertMock();
+      const acc = mockAccounts.find((m) => m.id === accountId);
+      if (!acc) throw new Error("Account not found");
+      acc.origin = origin;
     },
   };
 }

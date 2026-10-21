@@ -11,8 +11,8 @@
  *   4. Timeouts: a getCode request that doesn't respond within 10s is
  *      aborted and the port is reconnected. An attacker who DoSes the
  *      host cannot hang the popup indefinitely.
- *   5. We never send a "secret" field in any request — the protocol
- *      intentionally has no such field.
+ *   5. Only an explicit addAccount action sends an otpauth URI (including its
+ *      setup secret) to the local native host for encrypted vault storage.
  */
 
 import {
@@ -55,7 +55,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 interface PendingRequest {
   resolve: (r: NativeHostResponse) => void;
   reject: (e: Error) => void;
-  timer: number;
+  timer: ReturnType<typeof setTimeout>;
   startedAt: number;
 }
 
@@ -79,7 +79,7 @@ export function connectNativeHost(opts: {
     opts.onDisconnect?.(err);
     // Reject all in-flight requests with host-down.
     for (const [id, pending] of inflight) {
-      window.clearTimeout(pending.timer);
+      clearTimeout(pending.timer);
       pending.reject(new Error(`native host disconnected (request ${id})`));
     }
     inflight.clear();
@@ -112,7 +112,7 @@ function handleIncoming(msg: unknown) {
     console.warn("[keytap:nm] no in-flight request for id=%s (late or duplicate)", id);
     return;
   }
-  window.clearTimeout(pending.timer);
+  clearTimeout(pending.timer);
   inflight.delete(id);
   if (isErrorResponse(response)) {
     pending.reject(new Error(`${response.payload.code}: ${response.payload.message}`));
@@ -132,7 +132,7 @@ export function sendRequest(
 ): Promise<NativeHostResponse> {
   const id = newRequestId();
   return new Promise<NativeHostResponse>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
+    const timer = setTimeout(() => {
       if (inflight.delete(id)) {
         reject(new Error(`request ${id} timed out after ${timeoutMs}ms`));
       }
@@ -140,16 +140,17 @@ export function sendRequest(
     inflight.set(id, { resolve, reject, timer, startedAt: Date.now() });
     try {
       const json = serializeRequest(id, request);
-      // Sanity: never send the substring "secret" in any field of a request.
-      if (json.toLowerCase().includes("secret")) {
-        window.clearTimeout(timer);
+      // User initiated account import necessarily includes the otpauth URI's
+      // `secret=` parameter. Only this request may carry it to the local host.
+      if (request.type !== "addAccount" && json.toLowerCase().includes("secret")) {
+        clearTimeout(timer);
         inflight.delete(id);
         reject(new Error("refusing to send request containing substring 'secret'"));
         return;
       }
       port.postMessage(JSON.parse(json));
     } catch (e) {
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       inflight.delete(id);
       reject(e instanceof Error ? e : new Error(String(e)));
     }
@@ -209,9 +210,71 @@ export async function requestStatus(port: chrome.runtime.Port | null): Promise<S
   }
 }
 
+export async function requestAddAccount(
+  port: chrome.runtime.Port | null,
+  payload: { otpauthUri: string; origin: string; passphrase: string },
+): Promise<void> {
+  if (!port) throw new Error("native host port not initialized");
+  const resp = await sendRequest(port, { type: "addAccount", payload });
+  if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+}
+
+export async function requestDeleteAccount(
+  port: chrome.runtime.Port | null,
+  accountId: string,
+): Promise<void> {
+  if (!port) throw new Error("native host port not initialized");
+  const resp = await sendRequest(port, { type: "deleteAccount", payload: { accountId } });
+  if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+}
+
+export async function requestUnlockVault(
+  port: chrome.runtime.Port | null,
+  passphrase: string,
+): Promise<void> {
+  if (!port) throw new Error("native host port not initialized");
+  const resp = await sendRequest(port, { type: "unlockVault", payload: { passphrase } });
+  if (resp.type !== "status" || resp.payload.vaultLocked) throw new Error("vault did not unlock");
+}
+
 // ---------------------------------------------------------------------------
 // createNativeBackend — PopupBackend adapter
 // ---------------------------------------------------------------------------
+
+async function sendViaBackgroundOrDirect(
+  request: ExtensionRequest,
+  getPort: () => chrome.runtime.Port | null,
+): Promise<NativeHostResponse> {
+  // If we are in an extension context, route via background service worker so the
+  // native host port is held open persistently by the service worker.
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage && chrome.runtime.id) {
+    const res = await new Promise<{ ok: boolean; response?: NativeHostResponse; error?: string }>(
+      (resolve, reject) => {
+        try {
+          chrome.runtime.sendMessage(
+            { type: "keytap:native-request", request },
+            (response) => {
+              const err = chrome.runtime.lastError;
+              if (err) return reject(new Error(err.message));
+              resolve(response);
+            },
+          );
+        } catch (e) {
+          reject(e);
+        }
+      },
+    );
+    if (!res || !res.ok) {
+      throw new Error(res?.error ?? "native messaging request failed");
+    }
+    return res.response!;
+  }
+
+  // Fallback to direct port
+  const p = getPort();
+  if (!p) throw new Error("native host unavailable");
+  return sendRequest(p, request);
+}
 
 /**
  * Build a PopupBackend that talks to the real native host. Used by
@@ -241,27 +304,69 @@ export function createNativeBackend(): PopupBackend {
     hostVersionLabel: "native",
 
     async listAccounts() {
-      const p = getPort();
-      if (!p) return { accounts: [], vaultLocked: true };
-      const payload = await requestListAccounts(p);
-      return { accounts: payload.accounts, vaultLocked: payload.vaultLocked };
+      try {
+        const resp = await sendViaBackgroundOrDirect({ type: "listAccounts", payload: {} }, getPort);
+        if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+        return { accounts: resp.payload.accounts, vaultLocked: resp.payload.vaultLocked };
+      } catch (e) {
+        console.error("[keytap:nm] listAccounts failed:", e);
+        return { accounts: [], vaultLocked: true };
+      }
     },
 
     async getCode(accountId: string, origin: string) {
-      const p = getPort();
-      if (!p) throw new Error("native host unavailable");
-      return requestGetCode(p, { accountId, origin });
+      const resp = await sendViaBackgroundOrDirect(
+        { type: "getCode", payload: { accountId, origin } },
+        getPort,
+      );
+      if (resp.type !== "code") throw new Error(`expected code, got ${resp.type}`);
+      return resp.payload;
+    },
+
+    async importAccount(otpauthUri: string, origin: string, passphrase: string) {
+      const resp = await sendViaBackgroundOrDirect(
+        { type: "addAccount", payload: { otpauthUri, origin, passphrase } },
+        getPort,
+      );
+      if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+    },
+
+    async deleteAccount(accountId: string) {
+      const resp = await sendViaBackgroundOrDirect(
+        { type: "deleteAccount", payload: { accountId } },
+        getPort,
+      );
+      if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+    },
+
+    async updateAccountOrigin(accountId: string, origin: string) {
+      const resp = await sendViaBackgroundOrDirect(
+        { type: "updateAccountOrigin", payload: { accountId, origin } },
+        getPort,
+      );
+      if (resp.type !== "accounts") throw new Error(`expected accounts, got ${resp.type}`);
+    },
+
+    async unlockVault(passphrase: string) {
+      const resp = await sendViaBackgroundOrDirect(
+        { type: "unlockVault", payload: { passphrase } },
+        getPort,
+      );
+      if (resp.type !== "status" || resp.payload.vaultLocked) throw new Error("vault did not unlock");
     },
 
     async lock() {
-      const p = getPort();
-      if (!p) return;
-      await requestLock(p);
+      await sendViaBackgroundOrDirect({ type: "lock", payload: {} }, getPort).catch(() => {});
     },
 
     async getStatus() {
-      const p = getPort();
-      return requestStatus(p);
+      try {
+        const resp = await sendViaBackgroundOrDirect({ type: "getStatus", payload: {} }, getPort);
+        if (resp.type === "status") return resp.payload;
+        return null;
+      } catch {
+        return null;
+      }
     },
 
     async getSettings() {

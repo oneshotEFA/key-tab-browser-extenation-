@@ -10,6 +10,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/*
+ * The popup reuses React components from the project-level src/ directory.
+ * Tailwind v4 only scans files under this extension by default, which left
+ * the production popup with its reset styles but none of its utility classes.
+ */
+@source "../../../src";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

@@ -9,3 +9,4 @@
 
 export * from "./utils";
 export * from "./totp";
+export * from "./migration";

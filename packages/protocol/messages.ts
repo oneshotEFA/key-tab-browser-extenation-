@@ -12,10 +12,9 @@
  * 2. `serializeRequest` ALWAYS embeds PROTOCOL_VERSION. Never send an
  *    envelope without it — the host will reject it as malformed.
  *
- * 3. `parseResponse` rejects any response payload whose JSON serialization
- *    contains the substring "secret". The native host is structured to never
- *    emit it, but we defend in depth: a compromised or buggy host that ever
- *    leaked a shared secret across stdio would be caught here.
+ * 3. `parseResponse` rejects host responses containing "secret". An explicit
+ *    user-initiated addAccount request carries an otpauth URI to the local
+ *    native host, which encrypts it before persistence; responses never echo it.
  *
  * 4. `requestId` MUST be non-empty. Empty / whitespace-only IDs are rejected.
  *
@@ -26,9 +25,8 @@
  * 6. Field names are camelCase to match `#[serde(rename_all = "camelCase")]`
  *    on the Rust side.
  *
- * NEVER add a `secret: string` field to any type in this file. The native
- * host intentionally keeps shared secrets out of the protocol — only derived
- * TOTP codes cross the stdio boundary.
+ * NEVER add a raw shared-secret field or return a setup URI in a response.
+ * The sole inbound import URI is handled only by the local native host.
  */
 
 /** Wire protocol version. Bumped on breaking changes. Mirrors Rust `PROTOCOL_VERSION`. */
@@ -62,6 +60,27 @@ export interface GetCodePayload {
   tabId?: number;
 }
 
+/** User-initiated import. The native host parses the URI and stores its key
+ * only inside the encrypted vault. The URI and passphrase are never returned. */
+export interface AddAccountPayload {
+  otpauthUri: string;
+  origin: string;
+  passphrase: string;
+}
+
+export interface DeleteAccountPayload {
+  accountId: string;
+}
+
+export interface UpdateAccountOriginPayload {
+  accountId: string;
+  origin: string;
+}
+
+export interface UnlockVaultPayload {
+  passphrase: string;
+}
+
 /** Empty payload for ListAccounts / Lock / GetStatus. Rust uses EmptyPayload {}. */
 export type EmptyPayload = Record<string, never>;
 
@@ -93,6 +112,7 @@ export interface GetCodeResponse {
 
 export interface StatusPayload {
   vaultLocked: boolean;
+  vaultExists: boolean;
   /** Unix ms when the vault will auto-lock, or null if no timer is armed. */
   autoLockAt: number | null;
   /** Unix ms when the unlock session expires (hard cap = 30 min), or null. */
@@ -146,6 +166,10 @@ export type ExtensionRequest =
   | { type: "ping"; payload: PingPayload }
   | { type: "listAccounts"; payload: EmptyPayload }
   | { type: "getCode"; payload: GetCodePayload }
+  | { type: "addAccount"; payload: AddAccountPayload }
+  | { type: "deleteAccount"; payload: DeleteAccountPayload }
+  | { type: "updateAccountOrigin"; payload: UpdateAccountOriginPayload }
+  | { type: "unlockVault"; payload: UnlockVaultPayload }
   | { type: "lock"; payload: EmptyPayload }
   | { type: "getStatus"; payload: EmptyPayload };
 

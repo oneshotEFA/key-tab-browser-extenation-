@@ -72,6 +72,38 @@ export async function executeFill(tabId: number, code: string): Promise<void> {
  * boundary.
  */
 function fillInPage(code: string) {
+  const cleanCode = code.replace(/\D/g, "");
+  if (!cleanCode) return;
+
+  function setInputValue(el: HTMLInputElement, val: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(el, val);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // 1. Check for segmented inputs (multiple single-digit inputs, e.g. 6 boxes)
+  const singleDigitInputs = Array.from(
+    document.querySelectorAll<HTMLInputElement>(
+      'input[maxlength="1"], input[data-index], input[data-input-otp-target], input[pattern="[0-9]"]',
+    ),
+  ).filter((el) => {
+    const type = el.type.toLowerCase();
+    return (type === "text" || type === "tel" || type === "number" || type === "password") && !el.disabled;
+  });
+
+  if (singleDigitInputs.length >= 4 && singleDigitInputs.length <= 8) {
+    for (let i = 0; i < Math.min(singleDigitInputs.length, cleanCode.length); i++) {
+      setInputValue(singleDigitInputs[i], cleanCode[i]);
+    }
+    singleDigitInputs[Math.min(cleanCode.length - 1, singleDigitInputs.length - 1)].focus({ preventScroll: true });
+    return;
+  }
+
+  // 2. Search for standard OTP input
   const selectors = [
     'input[autocomplete="one-time-code"]',
     'input[inputmode="numeric"][name*="otp" i]',
@@ -79,23 +111,43 @@ function fillInPage(code: string) {
     'input[inputmode="numeric"][name*="token" i]',
     'input[inputmode="numeric"][name*="2fa" i]',
     'input[name*="twofactor" i]',
+    'input[id*="totp" i]',
+    'input[name*="totp" i]',
+    'input[id*="otp" i]',
+    'input[name*="otp" i]',
+    'input[id*="2fa" i]',
+    'input[name*="2fa" i]',
   ];
   let target: HTMLInputElement | null = null;
   for (const sel of selectors) {
     target = document.querySelector<HTMLInputElement>(sel);
     if (target) break;
   }
+
+  if (document.activeElement instanceof HTMLInputElement) {
+    target = document.activeElement;
+  }
+
   if (!target) {
     console.warn("Keytap: no OTP field detected on this page");
     return;
   }
-  const setter = Object.getOwnPropertyDescriptor(
-    window.HTMLInputElement.prototype,
-    "value",
-  )?.set;
-  setter?.call(target, code);
-  target.dispatchEvent(new Event("input", { bubbles: true }));
-  target.dispatchEvent(new Event("change", { bubbles: true }));
+
+  setInputValue(target, cleanCode);
+
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", cleanCode);
+    const pasteEvt = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dt,
+    });
+    target.dispatchEvent(pasteEvt);
+  } catch {
+    // Ignore fallback
+  }
+
   target.focus({ preventScroll: true });
   // SECURITY: do NOT call target.form?.submit() or dispatch a keydown Enter.
 }

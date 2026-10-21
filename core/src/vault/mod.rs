@@ -96,6 +96,17 @@ impl Vault {
         Ok(())
     }
 
+    pub fn update_origin(&self, id: &str, origin: &str) -> Result<(), VaultError> {
+        let mut i = self.inner.lock().unwrap();
+        if matches!(i.status, VaultStatus::Locked) { return Err(VaultError::Locked); }
+        if let Some(a) = i.accounts.iter_mut().find(|a| a.id == id) {
+            a.origin = origin.to_string();
+            Ok(())
+        } else {
+            Err(VaultError::AccountNotFound(id.into()))
+        }
+    }
+
     pub fn save(&self) -> Result<(), VaultError> {
         let i = self.inner.lock().unwrap();
         let path = i.path.as_ref().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no path"))?;

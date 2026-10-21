@@ -6,19 +6,21 @@
  * Layout: 360px wide × 48px tall. Dense.
  */
 
-import { ShieldCheck, Lock, Plus, Settings, ShieldAlert, ShieldX, FlaskConical } from "lucide-react";
+import { ShieldCheck, Lock, Plus, Settings, ShieldAlert, ShieldX, FlaskConical, ArrowDownToLine } from "lucide-react";
 import type { VaultState } from "./types";
 import { cn } from "@keytap/lib";
 
 export function TopBar({
   vaultState,
   onAdd,
+  onImport,
   onSettings,
   onLock,
   canLock,
 }: {
   vaultState: VaultState;
   onAdd: () => void;
+  onImport?: () => void;
   onSettings: () => void;
   onLock: () => void;
   canLock: boolean;
@@ -36,6 +38,11 @@ export function TopBar({
         {badge}
       </div>
       <div className="flex items-center gap-1">
+        {onImport && (
+          <IconButton label="Import accounts from Google Authenticator, etc." onClick={onImport} disabled={vaultState === "host-down"}>
+            <ArrowDownToLine className="size-4" />
+          </IconButton>
+        )}
         <IconButton label="Add account" onClick={onAdd} disabled={vaultState === "host-down"}>
           <Plus className="size-4" />
         </IconButton>

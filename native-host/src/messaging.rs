@@ -15,6 +15,7 @@ pub fn write_message<W: Write>(w: &mut W, bytes: &[u8]) -> io::Result<()> {
     w.write_all(&(bytes.len() as u32).to_le_bytes())?; w.write_all(bytes)?; w.flush()
 }
 
+#[allow(dead_code)]
 pub fn read_request<R: Read>(r: &mut R) -> Result<(String, ExtensionRequest), ProtocolError> {
     let raw = read_message(r).map_err(ProtocolError::Io)?; parse_request(&raw)
 }

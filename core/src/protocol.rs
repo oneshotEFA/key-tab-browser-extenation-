@@ -16,6 +16,22 @@ pub struct PongPayload { pub host_version: String, pub capabilities: Vec<String>
 pub struct GetCodePayload { pub account_id: String, pub origin: String, #[serde(skip_serializing_if = "Option::is_none", default)] pub tab_id: Option<u32> }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AddAccountPayload { pub otpauth_uri: String, pub origin: String, pub passphrase: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAccountPayload { pub account_id: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAccountOriginPayload { pub account_id: String, pub origin: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockVaultPayload { pub passphrase: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EmptyPayload {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -37,7 +53,7 @@ pub struct GetCodeResponse { pub account_id: String, pub code: String, pub issue
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusPayload {
-    pub vault_locked: bool, pub auto_lock_at: Option<u64>, pub session_expires_at: Option<u64>, pub host_version: String,
+    pub vault_locked: bool, pub vault_exists: bool, pub auto_lock_at: Option<u64>, pub session_expires_at: Option<u64>, pub host_version: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,6 +72,10 @@ pub enum ExtensionRequest {
     Ping(PingPayload),
     ListAccounts(EmptyPayload),
     GetCode(GetCodePayload),
+    AddAccount(AddAccountPayload),
+    DeleteAccount(DeleteAccountPayload),
+    UpdateAccountOrigin(UpdateAccountOriginPayload),
+    UnlockVault(UnlockVaultPayload),
     Lock(EmptyPayload),
     GetStatus(EmptyPayload),
 }

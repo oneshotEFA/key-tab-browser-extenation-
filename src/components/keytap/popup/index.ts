@@ -16,4 +16,5 @@ export { AccountRow } from "./AccountRow";
 export { AccountList, originMatches } from "./AccountList";
 export { StatusBar } from "./StatusBar";
 export { AddAccountDialog } from "./AddAccountDialog";
+export { ImportAccountsDialog } from "./ImportAccountsDialog";
 export { SettingsDialog } from "./SettingsDialog";

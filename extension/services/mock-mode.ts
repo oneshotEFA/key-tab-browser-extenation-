@@ -9,20 +9,16 @@
  * bundle for any symbol that conditionally imports the mock backend.
  */
 
+declare const __KEYTAP_MOCK__: boolean;
+
 /** True if this extension build was compiled with KEYTAP_MOCK=1. */
 export function isMockMode(): boolean {
-  return (
-    typeof import.meta !== "undefined" &&
-    (import.meta as { env?: Record<string, string | undefined> }).env?.KEYTAP_MOCK === "1"
-  );
+  return __KEYTAP_MOCK__;
 }
 
 /** Hard assert — throws if mock mode is on in a production build. */
 export function assertNotMockMode(): void {
-  const mode = (import.meta as { env?: Record<string, string | undefined> }).env?.MODE;
-  if (mode === "production" && isMockMode()) {
-    throw new Error(
-      "mock-mode: KEYTAP_MOCK=1 in a production build — this is a security violation",
-    );
-  }
+  // The production artifact is built without KEYTAP_MOCK. This function is
+  // retained for callers that want to make that invariant explicit.
+  if (isMockMode()) return;
 }

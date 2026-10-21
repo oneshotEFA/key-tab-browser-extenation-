@@ -20,7 +20,10 @@
  */
 
 /** True if mock mode is enabled. */
+declare const __KEYTAP_MOCK__: boolean | undefined;
+
 export const MOCK_MODE: boolean =
+  (typeof __KEYTAP_MOCK__ !== "undefined" && __KEYTAP_MOCK__) ||
   (typeof process !== "undefined" &&
     process.env &&
     process.env.NEXT_PUBLIC_KEYTAP_MOCK === "1") ||

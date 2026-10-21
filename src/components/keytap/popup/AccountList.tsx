@@ -19,6 +19,8 @@ export function AccountList({
   search,
   onReveal,
   onFill,
+  onDelete,
+  onEditOrigin,
 }: {
   accounts: PopupAccount[];
   codes: Map<string, PopupOtp>;
@@ -27,6 +29,8 @@ export function AccountList({
   search: string;
   onReveal: (account: PopupAccount) => void;
   onFill: (account: PopupAccount) => void;
+  onDelete: (account: PopupAccount) => void;
+  onEditOrigin?: (account: PopupAccount) => void;
 }) {
   const { matching, others } = useMemo(() => {
     const filtered = accounts.filter((a) => matchSearch(a, search));
@@ -46,7 +50,7 @@ export function AccountList({
     return (
       <EmptyState
         title="No accounts yet"
-        body="Click + to add your first account. In production, you’ll need the desktop app or a QR code."
+        body="Use the + button above to add an account, then return to this site to fill its code."
       />
     );
   }
@@ -55,13 +59,13 @@ export function AccountList({
     return (
       <EmptyState
         title="No matches"
-        body={`No accounts match “${search}”. Press Esc or the X to clear.`}
+        body={`Nothing matches “${search}”. Clear the search to see all accounts.`}
       />
     );
   }
 
   return (
-    <ul className="divide-y divide-border">
+    <ul className="space-y-2 px-3 py-3">
       {matching.map((a) => (
         <AccountRow
           key={a.id}
@@ -71,10 +75,12 @@ export function AccountList({
           originMatch={!!activeOrigin && originMatches(a, activeOrigin)}
           onReveal={onReveal}
           onFill={onFill}
+          onDelete={onDelete}
+          onEditOrigin={onEditOrigin}
         />
       ))}
       {matching.length > 0 && others.length > 0 && (
-        <li className="px-3 py-1 text-[9px] font-medium uppercase tracking-wide text-muted-foreground/60">
+        <li className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
           Other accounts
         </li>
       )}
@@ -87,6 +93,8 @@ export function AccountList({
           originMatch={false}
           onReveal={onReveal}
           onFill={onFill}
+          onDelete={onDelete}
+          onEditOrigin={onEditOrigin}
         />
       ))}
     </ul>

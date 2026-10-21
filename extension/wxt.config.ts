@@ -17,6 +17,7 @@
  */
 
 import { defineConfig } from "wxt";
+import tailwindcss from "@tailwindcss/vite";
 
 // See extension/services/mock-mode.ts
 const MOCK = process.env.KEYTAP_MOCK === "1";
@@ -47,7 +48,7 @@ export default defineConfig({
       "storage",
       "commands",
     ],
-    host_permissions: [],
+    host_permissions: ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
     background: {
       service_worker: "background.js",
       type: "module",
@@ -99,8 +100,11 @@ export default defineConfig({
   // Always define the KEYTAP_MOCK env var, even when unset, so import.meta.env
   // shape is stable across dev/prod builds.
   vite: () => ({
+    plugins: [tailwindcss()],
     define: {
-      "import.meta.env.KEYTAP_MOCK": JSON.stringify(MOCK ? "1" : "0"),
+      // Use an explicit compile-time constant. `import.meta.env` is stripped
+      // from the MV3 service-worker IIFE output before Vite can preserve it.
+      __KEYTAP_MOCK__: JSON.stringify(MOCK),
     },
     resolve: {
       alias: {

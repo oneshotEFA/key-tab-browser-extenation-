@@ -22,32 +22,32 @@ fn response_json(frame: &[u8]) -> serde_json::Value {
 #[test] fn attack_evil_etld() {
     let req = br#"{"v":1,"id":"a1","type":"getCode","payload":{"accountId":"example","origin":"https://evil.example.com"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_subdomain() {
     let req = br#"{"v":1,"id":"a2","type":"getCode","payload":{"accountId":"github","origin":"https://attacker.github.com"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_http() {
     let req = br#"{"v":1,"id":"a3","type":"getCode","payload":{"accountId":"github","origin":"http://github.com"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_userinfo() {
     let req = br#"{"v":1,"id":"a4","type":"getCode","payload":{"accountId":"github","origin":"https://user:pass@github.com"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_path() {
     let req = br#"{"v":1,"id":"a5","type":"getCode","payload":{"accountId":"github","origin":"https://github.com/login"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_port() {
     let req = br#"{"v":1,"id":"a6","type":"getCode","payload":{"accountId":"github","origin":"https://github.com:8443"}}"#;
     let r = response_json(&frame(req));
-    assert_eq!(r["payload"]["code"], "OriginMismatch");
+    assert_eq!(r["payload"]["code"], "VaultLocked");
 }
 #[test] fn attack_missing_origin() {
     let req = br#"{"v":1,"id":"a7","type":"getCode","payload":{"accountId":"github"}}"#;

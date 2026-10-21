@@ -10,7 +10,7 @@
  * Reveal button shows the code in-place without filling any field.
  */
 
-import { ShieldCheck, ShieldAlert, Eye, Keyboard } from "lucide-react";
+import { ShieldCheck, ShieldAlert, Eye, Keyboard, Trash2, Globe2 } from "lucide-react";
 import type { PopupAccount, PopupOtp } from "./types";
 import { cn, formatCountdown, shortOrigin, initials } from "@keytap/lib";
 
@@ -21,6 +21,8 @@ export function AccountRow({
   originMatch,
   onReveal,
   onFill,
+  onDelete,
+  onEditOrigin,
 }: {
   account: PopupAccount;
   otp: PopupOtp | null;
@@ -28,6 +30,8 @@ export function AccountRow({
   originMatch: boolean;
   onReveal: (account: PopupAccount) => void;
   onFill: (account: PopupAccount) => void;
+  onDelete: (account: PopupAccount) => void;
+  onEditOrigin?: (account: PopupAccount) => void;
 }) {
   const remainingMs = otp ? Math.max(0, otp.expiresAt - now) : 0;
   const progress = otp ? remainingMs / (otp.period * 1000) : 0;
@@ -37,66 +41,85 @@ export function AccountRow({
   return (
     <li
       className={cn(
-        "group flex items-center gap-3 px-3 py-2 transition-colors",
-        "hover:bg-accent/40",
-        originMatch && "bg-emerald-50/60 dark:bg-emerald-950/20",
+        "group rounded-xl border p-3 transition-colors",
+        originMatch
+          ? "border-emerald-200 bg-emerald-50/70 shadow-sm shadow-emerald-950/5 dark:border-emerald-900/70 dark:bg-emerald-950/20"
+          : "border-border bg-card hover:border-foreground/20 hover:bg-accent/30",
       )}
     >
-      {/* Countdown ring */}
-      <CountdownRing progress={progress} remainingLabel={formatCountdown(remainingMs)} />
-
-      {/* Identity */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <Avatar initials={initials(account.issuer)} />
-          <span className="truncate text-sm font-medium">{account.issuer || account.label}</span>
-          {originMatch ? (
-            <ShieldCheck
-              className="size-3.5 shrink-0 text-emerald-500"
-              aria-label="Origin matches active tab"
-            />
-          ) : (
-            <ShieldAlert
-              className="size-3.5 shrink-0 text-muted-foreground/40"
-              aria-label="Origin does not match active tab"
-            />
-          )}
+      <div className="flex items-start gap-2.5">
+        <CountdownRing progress={progress} remainingLabel={formatCountdown(remainingMs)} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <Avatar initials={initials(account.issuer)} />
+            <span className="truncate text-sm font-semibold">{account.issuer || account.label}</span>
+            {originMatch ? (
+              <ShieldCheck className="size-3.5 shrink-0 text-emerald-600" aria-label="Matches current website" />
+            ) : (
+              <ShieldAlert className="size-3.5 shrink-0 text-muted-foreground/50" aria-label="Does not match current website" />
+            )}
+          </div>
+          <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
+            {account.label || "Account"} · <span className="font-mono">{shortOrigin(account.origin)}</span>
+          </div>
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {account.label || shortOrigin(account.origin)}
-          <span className="mx-1 text-muted-foreground/50">·</span>
-          <span className="font-mono">{shortOrigin(account.origin)}</span>
+        <div className="shrink-0 text-right">
+          <div
+            className={cn(
+              "font-mono text-base font-semibold tabular-nums tracking-[0.12em]",
+              code ? "text-foreground" : "text-muted-foreground/40",
+            )}
+            aria-label={code ? `Current code ${code}` : "No code available"}
+          >
+            {formatted}
+          </div>
+          <span className="text-[10px] text-muted-foreground">{code ? `${formatCountdown(remainingMs)} left` : "Loading"}</span>
         </div>
       </div>
 
-      {/* Code */}
-      <div
-        className={cn(
-          "shrink-0 font-mono text-sm tabular-nums tracking-wider",
-          code ? "text-foreground" : "text-muted-foreground/40",
-        )}
-        aria-label={code ? `Current code ${code}` : "No code available"}
-      >
-        {formatted}
-      </div>
-
-      {/* Actions */}
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="mt-3 flex items-center gap-2">
         {originMatch ? (
           <ActionButton
             label="Fill code into the OTP field"
             onClick={() => onFill(account)}
             icon={<Keyboard className="size-3.5" />}
             variant="default"
-          />
+          >
+            Fill code
+          </ActionButton>
         ) : (
           <ActionButton
             label="Reveal code (origin not authorized for autofill)"
             onClick={() => onReveal(account)}
             icon={<Eye className="size-3.5" />}
             variant="outline"
-          />
+          >
+            Copy code
+          </ActionButton>
         )}
+        {onEditOrigin && (
+          <button
+            type="button"
+            onClick={() => onEditOrigin(account)}
+            title={`Change authorized website for ${account.issuer || account.label}`}
+            aria-label={`Change authorized website for ${account.issuer || account.label}`}
+            className="flex size-7 items-center justify-center rounded-lg border border-transparent text-muted-foreground/60 transition-colors hover:border-foreground/20 hover:bg-accent/40 hover:text-foreground"
+          >
+            <Globe2 className="size-3.5" />
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onDelete(account)}
+          title={`Delete ${account.issuer || account.label}`}
+          aria-label={`Delete ${account.issuer || account.label}`}
+          className="flex size-7 items-center justify-center rounded-lg border border-transparent text-muted-foreground/50 transition-colors hover:border-destructive/20 hover:bg-destructive/10 hover:text-destructive"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+        <span className="ml-auto text-[10px] text-muted-foreground">
+          {originMatch ? "Safe for this site" : "Different website"}
+        </span>
       </div>
     </li>
   );
@@ -179,11 +202,13 @@ function ActionButton({
   onClick,
   icon,
   variant,
+  children,
 }: {
   label: string;
   onClick: () => void;
   icon: React.ReactNode;
   variant: "default" | "outline";
+  children: React.ReactNode;
 }) {
   return (
     <button
@@ -192,13 +217,14 @@ function ActionButton({
       aria-label={label}
       onClick={onClick}
       className={cn(
-        "inline-flex size-7 items-center justify-center rounded-md text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         variant === "default"
           ? "bg-primary text-primary-foreground hover:bg-primary/90"
           : "border border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground",
       )}
     >
       {icon}
+      {children}
     </button>
   );
 }

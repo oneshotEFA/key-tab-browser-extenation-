@@ -19,7 +19,7 @@
  */
 
 import { isMockMode } from "~/services/mock-mode";
-import { connectNativeHost, requestGetCode, requestListAccounts } from "~/services/native-messaging";
+import { connectNativeHost, requestGetCode, requestListAccounts, sendRequest } from "~/services/native-messaging";
 import { authorizeAutofill } from "~/services/origin-validator";
 import { executeFill, isCodeSafeToFill } from "~/services/autofill";
 import { defineBackground } from "wxt/utils/define-background";
@@ -27,22 +27,38 @@ import { defineBackground } from "wxt/utils/define-background";
 console.info("[keytap:bg] service worker starting (mock=%s)", isMockMode());
 
 // Keep the native host port alive for the lifetime of the service worker.
-// Reconnect on disconnect (Chrome may tear down the SW after 30s idle).
+// In Chrome MV3, an open connectNative port keeps the service worker alive.
 let port: chrome.runtime.Port | null = null;
 function ensurePort(): chrome.runtime.Port | null {
   if (isMockMode()) return null;
   if (port) return port;
-  port = connectNativeHost({
-    onDisconnect: () => {
-      console.warn("[keytap:bg] native host disconnected; will reconnect on next request");
-      port = null;
-    },
-    onMessage: () => {
-      // Correlated responses are handled via the in-flight promise map
-      // inside native-messaging.ts. This is a no-op listener.
-    },
-  });
+  try {
+    port = connectNativeHost({
+      onDisconnect: () => {
+        console.warn("[keytap:bg] native host disconnected; will reconnect on next request");
+        port = null;
+      },
+      onMessage: () => {
+        // Correlated responses are handled via the in-flight promise map
+        // inside native-messaging.ts. This is a no-op listener.
+      },
+    });
+  } catch (e) {
+    if (!String(e).includes("not implemented")) {
+      console.error("[keytap:bg] connectNative failed:", e);
+    }
+    port = null;
+  }
   return port;
+}
+
+// Eagerly connect on start so the native host port keeps SW alive
+if (!isMockMode()) {
+  try {
+    ensurePort();
+  } catch {
+    // Build-time fake browser only; the real listener is registered in Chrome.
+  }
 }
 
 // Keyboard shortcut: Ctrl+Shift+2 (Cmd+Shift+2 on macOS). WXT evaluates
@@ -62,8 +78,25 @@ try {
   // Build-time fake browser only; the real listener is registered in Chrome.
 }
 
-// Message from the popup (for "Fill" button clicks that need the SW).
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// Message listener for popup requests and fill actions
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "keytap:native-request" && msg.request) {
+    void (async () => {
+      try {
+        const p = ensurePort();
+        if (!p) {
+          sendResponse({ ok: false, error: "native host unavailable" });
+          return;
+        }
+        const resp = await sendRequest(p, msg.request);
+        sendResponse({ ok: true, response: resp });
+      } catch (e) {
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return true; // keep channel open for async sendResponse
+  }
+
   if (msg?.type === "keytap:fill-from-popup" && typeof msg.accountId === "string") {
     void (async () => {
       try {
@@ -84,6 +117,56 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
     })();
     return true; // keep channel open for async sendResponse
+  }
+
+  if (msg?.type === "keytap:check-match" && typeof msg.origin === "string") {
+    void (async () => {
+      try {
+        const p = ensurePort();
+        if (!p) {
+          sendResponse({ ok: false, error: "native host unavailable" });
+          return;
+        }
+        const resp = await requestListAccounts(p);
+        if (resp.vaultLocked) {
+          sendResponse({ ok: true, hasMatch: false, vaultLocked: true });
+          return;
+        }
+        const match = resp.accounts.find((a) => {
+          const allowed = [a.origin, ...(a.additionalOrigins ?? [])];
+          return authorizeAutofill(allowed, msg.origin);
+        });
+        if (match) {
+          sendResponse({
+            ok: true,
+            hasMatch: true,
+            vaultLocked: false,
+            account: { id: match.id, issuer: match.issuer, label: match.label },
+          });
+        } else {
+          sendResponse({ ok: true, hasMatch: false, vaultLocked: false });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return true;
+  }
+
+  if (msg?.type === "keytap:fill-active-tab" && sender.tab?.id && typeof msg.origin === "string") {
+    void (async () => {
+      try {
+        await autofillActiveTab({
+          accountId: typeof msg.accountId === "string" ? msg.accountId : undefined,
+          origin: msg.origin,
+          tabId: sender.tab?.id,
+        });
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return true;
   }
   return false;
 });

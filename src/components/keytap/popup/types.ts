@@ -49,6 +49,7 @@ export interface PopupOtp {
 export interface PopupStatus {
   vaultState: VaultState;
   vaultLocked: boolean;
+  vaultExists?: boolean;
   /** Unix ms when the vault auto-locks, or null. */
   autoLockAt: number | null;
   /** Unix ms when the unlock session expires (hard cap = 30 min), or null. */
