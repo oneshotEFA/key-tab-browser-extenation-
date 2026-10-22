@@ -88,7 +88,7 @@ Required to build the extension frontend:
 
 ### Step 1: Clone the Repository
 ```bash
-git clone https://github.com/your-username/keytap.git
+git clone https://github.com/oneshotEFA/key-tab-browser-extention.git
 cd keytap
 ```
 
@@ -137,7 +137,7 @@ Go back to `chrome://extensions/` and click the **Reload (↻)** button on the K
 ### Step 1: Clone the Repository
 Open PowerShell as Administrator:
 ```powershell
-git clone https://github.com/your-username/keytap.git
+git clone https://github.com/oneshotEFA/key-tab-browser-extention.git
 cd keytap
 ```
 
