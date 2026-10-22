@@ -99,8 +99,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           ) {
             await chrome.storage.local.set({ "keytap:biometric_passphrase": reqPayload.passphrase.trim() });
           }
-          // If response contains accounts, cache directory for matching even when vault locks!
-          if (resp.type === "accounts" && Array.isArray(resp.payload?.accounts)) {
+          // If response contains unlocked accounts, cache directory for matching even when vault locks!
+          if (
+            resp.type === "accounts" &&
+            !resp.payload?.vaultLocked &&
+            Array.isArray(resp.payload?.accounts) &&
+            resp.payload.accounts.length > 0
+          ) {
             await chrome.storage.local.set({ "keytap:account_directory": resp.payload.accounts });
           }
         }
@@ -137,31 +142,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "keytap:check-match" && typeof msg.origin === "string") {
     void (async () => {
       try {
-        const p = ensurePort();
-        if (!p) {
-          sendResponse({ ok: false, error: "native host unavailable" });
-          return;
-        }
-
         let accounts: Array<{ id: string; issuer: string; label: string; origin: string; additionalOrigins?: string[] }> = [];
         let isLocked = true;
 
-        try {
-          const resp = await requestListAccounts(p);
-          isLocked = resp.vaultLocked;
-          if (!isLocked && Array.isArray(resp.accounts) && resp.accounts.length > 0) {
-            accounts = resp.accounts;
-            await chrome.storage.local.set({ "keytap:account_directory": accounts });
-          }
-        } catch {
-          // host might be starting or locked
+        // 1. Read cached directory and biometric passphrase from storage first (instant, non-blocking)
+        const stored = await chrome.storage.local.get(["keytap:account_directory", "keytap:biometric_passphrase"]);
+        if (Array.isArray(stored["keytap:account_directory"])) {
+          accounts = stored["keytap:account_directory"];
         }
 
-        // If vault is locked or returned no accounts, check cached directory
-        if (accounts.length === 0) {
-          const stored = await chrome.storage.local.get("keytap:account_directory");
-          if (Array.isArray(stored["keytap:account_directory"])) {
-            accounts = stored["keytap:account_directory"];
+        // 2. Query native host status if port is active
+        const p = ensurePort();
+        if (p) {
+          try {
+            const resp = await requestListAccounts(p);
+            isLocked = resp.vaultLocked;
+            if (!isLocked && Array.isArray(resp.accounts) && resp.accounts.length > 0) {
+              accounts = resp.accounts;
+              await chrome.storage.local.set({ "keytap:account_directory": accounts });
+            }
+          } catch {
+            // host might be starting or locked
           }
         }
 
@@ -171,8 +172,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
 
         // Check if a biometric passphrase is saved
-        const passStored = await chrome.storage.local.get("keytap:biometric_passphrase");
-        const hasSavedPassphrase = Boolean(passStored["keytap:biometric_passphrase"]);
+        const hasSavedPassphrase = Boolean(stored["keytap:biometric_passphrase"]);
 
         if (match) {
           sendResponse({

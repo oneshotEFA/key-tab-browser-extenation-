@@ -75,11 +75,14 @@ export default defineContentScript({
       pill.style.userSelect = "none";
 
       const iconSpan = document.createElement("span");
-      iconSpan.textContent = "🔑";
+      iconSpan.textContent = matchInfo.hasSavedPassphrase ? "⚡" : "🔑";
       iconSpan.style.fontSize = "13px";
 
       const textSpan = document.createElement("span");
-      textSpan.textContent = `Fill 2FA with Keytap (${matchInfo.account.issuer || matchInfo.account.label})`;
+      const accountTitle = matchInfo.account.issuer || matchInfo.account.label;
+      textSpan.textContent = matchInfo.hasSavedPassphrase
+        ? `Autofill with Touch ID (${accountTitle})`
+        : `Fill 2FA with Keytap (${accountTitle})`;
 
       pill.appendChild(iconSpan);
       pill.appendChild(textSpan);

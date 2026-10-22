@@ -31,7 +31,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@keytap/lib";
 import type { AccountSummary, GetCodeResponse, StatusPayload } from "@keytap/protocol";
@@ -53,8 +53,10 @@ import { SettingsDialog } from "./SettingsDialog";
 import {
   parseOtpAuthUri,
   normalizeOrigin,
+  promptTouchIdOrPasscode,
+  getSavedBiometricPassphrase,
 } from "@keytap/lib";
-import { Globe2, ShieldCheck, ShieldX, Lock, KeyRound, Plus, Trash2 } from "lucide-react";
+import { Globe2, ShieldCheck, ShieldX, Lock, KeyRound, Plus, Trash2, Fingerprint, Sparkles } from "lucide-react";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -131,17 +133,31 @@ export function PopupApp({
   const refreshAccounts = useCallback(async () => {
     try {
       const result = await backend.listAccounts();
-      const popupAccounts: PopupAccount[] = result.accounts.map((a) => ({
+      let popupAccounts: PopupAccount[] = result.accounts.map((a) => ({
         ...a,
         additionalOrigins: a.additionalOrigins ?? [],
         allOrigins: dedupe([a.origin, ...(a.additionalOrigins ?? [])]),
       }));
-      setAccounts(popupAccounts);
-      if (!result.vaultLocked && popupAccounts.length > 0) {
+
+      // If vault is locked and listAccounts returned empty, restore cached directory
+      if (result.vaultLocked && popupAccounts.length === 0) {
+        if (typeof chrome !== "undefined" && chrome.storage?.local) {
+          const stored = await chrome.storage.local.get("keytap:account_directory");
+          if (Array.isArray(stored["keytap:account_directory"]) && stored["keytap:account_directory"].length > 0) {
+            popupAccounts = (stored["keytap:account_directory"] as AccountSummary[]).map((a) => ({
+              ...a,
+              additionalOrigins: a.additionalOrigins ?? [],
+              allOrigins: dedupe([a.origin, ...(a.additionalOrigins ?? [])]),
+            }));
+          }
+        }
+      } else if (!result.vaultLocked && popupAccounts.length > 0) {
         if (typeof chrome !== "undefined" && chrome.storage?.local) {
           void chrome.storage.local.set({ "keytap:account_directory": popupAccounts });
         }
       }
+
+      setAccounts(popupAccounts);
       setStatus((prev) => ({
         vaultState: backend.isMock ? "demo" : result.vaultLocked ? "locked" : "unlocked",
         vaultLocked: result.vaultLocked,
@@ -556,6 +572,11 @@ export function PopupApp({
     [backend, refreshAccounts],
   );
 
+  const matchingAccount = useMemo(() => {
+    if (!activeOrigin || accounts.length === 0) return null;
+    return accounts.find((a) => originMatches(a, activeOrigin)) ?? null;
+  }, [accounts, activeOrigin]);
+
   const vaultState: VaultState = status?.vaultState ?? (backend.isMock ? "demo" : "host-down");
   const canLock = backend.isMock ? true : vaultState === "unlocked";
 
@@ -585,6 +606,9 @@ export function PopupApp({
             vaultExists={status?.vaultExists ?? false}
             onUnlock={handleUnlock}
             onAddAccount={() => setShowAdd(true)}
+            matchingAccount={matchingAccount}
+            activeOrigin={activeOrigin}
+            onAutofillActiveSite={handleFill}
           />
         ) : (
           <AccountList
@@ -715,14 +739,28 @@ function VaultLockedView({
   vaultExists,
   onUnlock,
   onAddAccount,
+  matchingAccount,
+  activeOrigin,
+  onAutofillActiveSite,
 }: {
   vaultExists: boolean;
   onUnlock: (passphrase: string) => Promise<void>;
   onAddAccount: () => void;
+  matchingAccount?: PopupAccount | null;
+  activeOrigin?: string | null;
+  onAutofillActiveSite?: (account: PopupAccount) => Promise<void>;
 }) {
   const [passphrase, setPassphrase] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hasSavedPassphrase, setHasSavedPassphrase] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const pass = await getSavedBiometricPassphrase();
+      setHasSavedPassphrase(Boolean(pass));
+    })();
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -731,6 +769,52 @@ function VaultLockedView({
     setBusy(true);
     try {
       await onUnlock(passphrase);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTouchIdUnlock() {
+    if (busy) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const verified = await promptTouchIdOrPasscode("unlock Keytap vault");
+      if (!verified) {
+        setBusy(false);
+        return;
+      }
+      const savedPass = await getSavedBiometricPassphrase();
+      if (!savedPass) {
+        setError("No biometric credential saved. Enter your passphrase once to enable Touch ID.");
+        setBusy(false);
+        return;
+      }
+      await onUnlock(savedPass);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleQuickAutofill() {
+    if (busy || !matchingAccount) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const verified = await promptTouchIdOrPasscode("autofill 2FA code");
+      if (!verified) {
+        setBusy(false);
+        return;
+      }
+      const savedPass = await getSavedBiometricPassphrase();
+      if (savedPass) {
+        await onUnlock(savedPass);
+      }
+      await onAutofillActiveSite?.(matchingAccount);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -757,31 +841,84 @@ function VaultLockedView({
   }
 
   return (
-    <div className="flex h-full flex-col items-center justify-center p-6 text-center">
-      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-muted text-foreground">
-        <Lock className="size-7" />
+    <div className="flex h-full flex-col items-center justify-center p-5 text-center">
+      <div className="mb-3 flex size-12 items-center justify-center rounded-2xl bg-muted text-foreground">
+        <Lock className="size-6" />
       </div>
       <h2 className="text-base font-semibold">Vault is locked</h2>
-      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-        Enter your passphrase to access your 2FA accounts and autofill codes.
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        {hasSavedPassphrase
+          ? "Unlock with Touch ID or enter your vault passphrase."
+          : "Enter your passphrase once to access your 2FA accounts and enable Touch ID."}
       </p>
 
-      <form onSubmit={submit} className="mt-5 w-full space-y-3">
+      {error && (
+        <Alert variant="destructive" className="mt-3 py-2 text-left w-full">
+          <AlertDescription className="break-all text-xs">{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {matchingAccount && (
+        <div className="mt-4 w-full rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-left">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                <Sparkles className="size-3" />
+                Current website match
+              </div>
+              <p className="mt-0.5 truncate text-xs font-semibold">
+                {matchingAccount.issuer || matchingAccount.label}
+              </p>
+              <p className="truncate text-[10px] text-muted-foreground">
+                {activeOrigin}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              onClick={handleQuickAutofill}
+              className="gap-1.5 shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs h-8 px-2.5 shadow-sm"
+            >
+              <Fingerprint className="size-3.5" />
+              Autofill
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {hasSavedPassphrase && (
+        <div className="mt-3 w-full">
+          <Button
+            type="button"
+            disabled={busy}
+            onClick={handleTouchIdUnlock}
+            className="w-full gap-2 bg-primary text-primary-foreground font-medium shadow-sm"
+          >
+            <Fingerprint className="size-4" />
+            {busy ? "Authenticating…" : "Unlock with Touch ID"}
+          </Button>
+
+          <div className="relative my-3 flex items-center justify-center">
+            <div className="w-full border-t border-border" />
+            <span className="absolute bg-background px-2 text-[10px] uppercase text-muted-foreground">
+              or enter passphrase
+            </span>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={submit} className={cn("w-full space-y-2.5", !hasSavedPassphrase && "mt-4")}>
         <Input
           type="password"
           placeholder="Vault passphrase"
           value={passphrase}
           onChange={(e) => setPassphrase(e.target.value)}
-          autoFocus
+          autoFocus={!hasSavedPassphrase}
           disabled={busy}
           autoComplete="current-password"
         />
-        {error && (
-          <Alert variant="destructive" className="py-2 text-left">
-            <AlertDescription className="break-all text-xs">{error}</AlertDescription>
-          </Alert>
-        )}
-        <Button type="submit" className="w-full" disabled={busy || !passphrase}>
+        <Button type="submit" variant={hasSavedPassphrase ? "outline" : "default"} className="w-full" disabled={busy || !passphrase}>
           {busy ? "Unlocking…" : "Unlock vault"}
         </Button>
       </form>
